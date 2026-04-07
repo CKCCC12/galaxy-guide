@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>台灣銀河拍攝地點推薦</title>
+  <style>
+    /* ── 全域 ── */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── 銀河背景：多層漸層模擬銀河帶 ── */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      padding: 16px;
+      color: #d0e4ff;
+      position: relative;
+      overflow-x: hidden;
+
+      /* 底色：深邃午夜藍 */
+      background-color: #060c20;
+
+      /* 銀河帶：斜對角的柔和光帶 */
+      background-image:
+        /* 銀河核心光芒（橘金色暈） */
+        radial-gradient(ellipse 40% 20% at 65% 60%,
+          rgba(180, 130, 60, 0.12) 0%, transparent 100%),
+        /* 銀河帶主體（斜向淡藍白光） */
+        linear-gradient(
+          125deg,
+          transparent        0%,
+          transparent       20%,
+          rgba(80,110,200, 0.06) 30%,
+          rgba(140,170,255,0.13) 42%,
+          rgba(200,220,255,0.10) 50%,
+          rgba(140,170,255,0.13) 58%,
+          rgba(80,110,200, 0.06) 68%,
+          transparent       80%,
+          transparent      100%
+        ),
+        /* 左下星雲暈（藍紫色） */
+        radial-gradient(ellipse 60% 45% at 10% 80%,
+          rgba(40, 60, 180, 0.25) 0%, transparent 70%),
+        /* 右上深藍暈 */
+        radial-gradient(ellipse 50% 40% at 90% 15%,
+          rgba(20, 50, 150, 0.30) 0%, transparent 70%),
+        /* 中央深色核心 */
+        radial-gradient(ellipse 80% 60% at 50% 50%,
+          rgba(5,10,40, 0.6) 0%, transparent 100%);
+    }
+
+    /* ── 星點畫布 ── */
+    #stars {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── 動態星雲層：緩慢漂移的星雲光暈 ── */
+    #nebula {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      /* 三個橢圓星雲，疊在背景色之上 */
+      background:
+        radial-gradient(ellipse 55% 30% at 18% 65%,
+          rgba(35, 55, 180, 0.22) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 28% at 82% 28%,
+          rgba(90, 40, 150, 0.18) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 35% at 55% 85%,
+          rgba(20, 50, 130, 0.16) 0%, transparent 70%);
+      animation: nebulaShift 22s ease-in-out infinite alternate;
+    }
+
+    @keyframes nebulaShift {
+      0%   { transform: scale(1.00) translate( 0%,  0%); opacity: 0.75; }
+      25%  { transform: scale(1.04) translate(-2%,  1%); opacity: 1.00; }
+      50%  { transform: scale(0.97) translate( 1%, -2%); opacity: 0.85; }
+      75%  { transform: scale(1.03) translate( 2%,  1%); opacity: 1.00; }
+      100% { transform: scale(1.01) translate(-1%,  2%); opacity: 0.80; }
+    }
+
+    /* 所有內容要在星點之上 */
+    .page-content {
+      position: relative;
+      z-index: 1;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* ── 標題 ── */
+    .header {
+      text-align: center;
+      padding: 32px 0 24px;
+    }
+    .header h1 {
+      font-size: 1.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      /* 午夜藍系金屬光澤感文字 */
+      background: linear-gradient(135deg, #a8c8ff 0%, #e0ecff 50%, #7ab0ff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-shadow: none;
+    }
+    .header p {
+      font-size: 0.83rem;
+      color: #5a7aaa;
+      margin-top: 8px;
+      letter-spacing: 0.03em;
+    }
+
+    /* ── 玻璃卡片（Glassmorphism） ── */
+    .card {
+      background: rgba(8, 18, 55, 0.72);
+      border: 1px solid rgba(80, 120, 220, 0.25);
+      border-radius: 18px;
+      padding: 22px;
+      margin-bottom: 18px;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 4px 32px rgba(0, 20, 80, 0.4);
+    }
+
+    /* ── 表單 ── */
+    .form-group {
+      margin-bottom: 14px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.78rem;
+      color: #6080b0;
+      margin-bottom: 6px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 11px 14px;
+      background: rgba(10, 25, 70, 0.8);
+      border: 1px solid rgba(60, 100, 200, 0.35);
+      border-radius: 10px;
+      color: #c8dcff;
+      font-size: 0.95rem;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: rgba(100, 160, 255, 0.7);
+      background: rgba(10, 30, 80, 0.9);
+    }
+    /* select 箭頭 */
+    .select-wrap {
+      position: relative;
+    }
+    .select-wrap::after {
+      content: "▾";
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #4a6aaa;
+      pointer-events: none;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .btn-submit {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #1a3a8a, #2a5cd0, #1a3a8a);
+      border: 1px solid rgba(80, 140, 255, 0.5);
+      border-radius: 12px;
+      color: #d0e8ff;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+      letter-spacing: 0.06em;
+      transition: all 0.2s;
+      box-shadow: 0 2px 16px rgba(30, 80, 200, 0.35);
+    }
+    .btn-submit:hover {
+      background: linear-gradient(135deg, #1e44a0, #3068e0, #1e44a0);
+      box-shadow: 0 4px 24px rgba(40, 100, 255, 0.45);
+    }
+    .btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* ── 載入提示 ── */
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 16px 0 4px;
+      color: #5a7aaa;
+      font-size: 0.87rem;
+    }
+
+    /* ── 錯誤 ── */
+    .error-box {
+      background: rgba(40, 10, 20, 0.8);
+      border: 1px solid rgba(180, 60, 80, 0.4);
+      border-radius: 12px;
+      padding: 14px 18px;
+      color: #ff9090;
+      font-size: 0.88rem;
+      margin-bottom: 16px;
+      backdrop-filter: blur(8px);
+    }
+
+    /* ── 結果標題 ── */
+    .result-header {
+      font-size: 0.85rem;
+      color: #5a80b8;
+      letter-spacing: 0.04em;
+      margin-bottom: 14px;
+    }
+
+    /* ── 地點卡片 ── */
+    .location-card {
+      background: rgba(6, 16, 52, 0.78);
+      border: 1px solid rgba(50, 90, 180, 0.28);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 14px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 2px 20px rgba(0, 10, 60, 0.5);
+    }
+    /* 金銀銅色邊框 */
+    .location-card.rank-1 {
+      border-color: rgba(200, 170, 60, 0.55);
+      box-shadow: 0 2px 24px rgba(180, 140, 30, 0.2);
+    }
+    .location-card.rank-2 {
+      border-color: rgba(180, 190, 210, 0.45);
+    }
+    .location-card.rank-3 {
+      border-color: rgba(160, 110, 60, 0.45);
+    }
+
+    .loc-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #d8eaff;
+      margin-bottom: 4px;
+    }
+    .loc-meta {
+      font-size: 0.76rem;
+      color: #4a6a9a;
+      margin-bottom: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    /* 評分徽章 */
+    .score-badge {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 2px;
+      background: rgba(15, 35, 90, 0.9);
+      border: 1px solid rgba(70, 120, 220, 0.4);
+      border-radius: 10px;
+      padding: 5px 14px;
+      margin-bottom: 14px;
+    }
+    .score-num {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #80b8ff;
+    }
+    .score-unit {
+      font-size: 0.8rem;
+      color: #4a6a9a;
+      margin-left: 2px;
+    }
+
+    /* 指標列 */
+    .metric {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.84rem;
+      margin-bottom: 8px;
+      color: #8aaad8;
+    }
+    .metric-icon { width: 20px; text-align: center; flex-shrink: 0; }
+    .metric-label { color: #4a6a90; width: 36px; flex-shrink: 0; }
+    .metric-value { color: #b0ccf0; flex-shrink: 0; font-size: 0.82rem; }
+
+    /* 進度條 */
+    .bar-bg {
+      flex: 1;
+      height: 5px;
+      background: rgba(20, 40, 100, 0.8);
+      border-radius: 3px;
+      overflow: hidden;
+      min-width: 40px;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+    .bar-cloud { background: linear-gradient(90deg, #3a6080, #70a0c0); }
+    .bar-moon  { background: linear-gradient(90deg, #7a6020, #d4a830); }
+    .bar-alt   { background: linear-gradient(90deg, #1a6040, #40b870); }
+
+    .bar-score {
+      font-size: 0.72rem;
+      color: #3a5a80;
+      width: 40px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    /* 黃金窗口 */
+    .golden-windows { margin-top: 12px; }
+    .golden-tag {
+      display: inline-block;
+      background: rgba(60, 45, 10, 0.8);
+      border: 1px solid rgba(180, 140, 30, 0.5);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      color: #d4a830;
+      margin: 3px 4px 0 0;
+    }
+    .no-golden {
+      font-size: 0.78rem;
+      color: #3a5070;
+      margin-top: 8px;
+    }
+
+    /* 分隔線 */
+    .divider {
+      border: none;
+      border-top: 1px solid rgba(40, 70, 140, 0.3);
+      margin: 14px 0;
+    }
+
+    /* 其他地點 */
+    .others-section {
+      background: rgba(6, 14, 45, 0.72);
+      border: 1px solid rgba(40, 70, 150, 0.22);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-top: 4px;
+      backdrop-filter: blur(8px);
+    }
+    .others-title {
+      font-size: 0.75rem;
+      color: #3a5580;
+      margin-bottom: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .other-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(30, 50, 100, 0.4);
+      font-size: 0.83rem;
+    }
+    .other-row:last-child { border-bottom: none; }
+    .other-name { color: #7090c0; }
+    .other-score { color: #3a5880; font-size: 0.78rem; }
+
+    /* ── 頁尾 ── */
+    .footer {
+      text-align: center;
+      font-size: 0.7rem;
+      color: #2a3a60;
+      margin-top: 28px;
+      padding-bottom: 20px;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 動態星雲層 -->
+  <div id="nebula"></div>
+  <!-- 星點 + 流星畫布 -->
+  <canvas id="stars"></canvas>
+
+  <div class="page-content">
+
+    <!-- 標題 -->
+    <div class="header">
+      <h1>台灣銀河拍攝地點推薦</h1>
+      <p>整合天氣預報・月相・銀河仰角，找出最佳拍攝地點</p>
+    </div>
+
+    <!-- 查詢表單 -->
+    <div class="card">
+      <form method="POST" action="/recommend" onsubmit="showLoading()">
+
+        <div class="form-group">
+          <label>📅 查詢日期</label>
+          <input
+            type="date"
+            name="date"
+            value="{{ default_date }}"
+            required
+          />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>📍 區域</label>
+            <div class="select-wrap">
+              <select name="region">
+                <option value="全部" {% if not selected_region or selected_region == '全部' %}selected{% endif %}>全部地區</option>
+                <option value="花蓮" {% if selected_region == '花蓮' %}selected{% endif %}>花蓮</option>
+                <option value="台東" {% if selected_region == '台東' %}selected{% endif %}>台東</option>
+                <option value="屏東" {% if selected_region == '屏東' %}selected{% endif %}>屏東</option>
+                <option value="澎湖" {% if selected_region == '澎湖' %}selected{% endif %}>澎湖</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>💡 光害上限</label>
+            <div class="select-wrap">
+              <select name="bortle">
+                <option value="2" {% if selected_bortle == 2 %}selected{% endif %}>Bortle ≤ 2</option>
+                <option value="3" {% if selected_bortle == 3 %}selected{% endif %}>Bortle ≤ 3</option>
+                <option value="4" {% if selected_bortle == 4 or not selected_bortle %}selected{% endif %}>Bortle ≤ 4</option>
+                <option value="5" {% if selected_bortle == 5 %}selected{% endif %}>Bortle ≤ 5</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>🏆 顯示名次</label>
+          <div class="select-wrap">
+            <select name="top_n">
+              <option value="3" {% if not selected_top_n or selected_top_n == 3 %}selected{% endif %}>Top 3</option>
+              <option value="5" {% if selected_top_n == 5 %}selected{% endif %}>Top 5</option>
+              <option value="10" {% if selected_top_n == 10 %}selected{% endif %}>全部顯示</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-submit" id="submitBtn">
+          🔍 &nbsp;開始查詢
+        </button>
+      </form>
+
+      <div class="loading" id="loading">
+        ⏳ 正在查詢天氣與天文資料，約需 15–25 秒…
+      </div>
+    </div>
+
+    <!-- 錯誤訊息 -->
+    {% if error %}
+    <div class="error-box">❌ {{ error }}</div>
+    {% endif %}
+
+    <!-- 推薦結果 -->
+    {% if result %}
+    <div class="result-header">
+      📊 {{ result.date }} 推薦結果 ·
+      共評估 {{ result.candidates | length }} 個候選地點
+    </div>
+
+    {% set medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"] %}
+
+    {% for item in result.top %}
+    {% set loc  = item.location %}
+    {% set bd   = item.breakdown %}
+    {% set moon = item.astro.moon %}
+    {% set mw   = item.astro.milkyway %}
+    {% set sum  = item.weather.night_summary %}
+    {% set gold = item.astro.golden_windows %}
+    {% set rank = loop.index %}
+
+    <div class="location-card rank-{{ rank if rank <= 3 else 0 }}">
+      <div class="loc-title">{{ medals[rank-1] }} {{ loc.name }}</div>
+      <div class="loc-meta">
+        {{ loc.region }} &nbsp;·&nbsp; Bortle {{ loc.bortle }} &nbsp;·&nbsp; 海拔 {{ loc.altitude_m }} m
+      </div>
+
+      <div class="score-badge">
+        <span class="score-num">{{ item.score | int }}</span>
+        <span class="score-unit">分</span>
+      </div>
+
+      <!-- 雲量 -->
+      <div class="metric">
+        <span class="metric-icon">☁️</span>
+        <span class="metric-label">雲量</span>
+        <span class="metric-value">{{ sum.avg_cloud }}%</span>
+        <div class="bar-bg">
+          <div class="bar-fill bar-cloud" style="width:{{ bd.cloud_score }}%"></div>
+        </div>
+        <span class="bar-score">{{ bd.cloud_score | int }}/100</span>
+      </div>
+
+      <!-- 月光 -->
+      <div class="metric">
+        <span class="metric-icon">🌙</span>
+        <span class="metric-label">月光</span>
+        <span class="metric-value">{{ moon.illumination_pct }}% {{ moon.phase_name }}</span>
+        <div class="bar-bg">
+          <div class="bar-fill bar-moon" style="width:{{ bd.moon_score }}%"></div>
+        </div>
+        <span class="bar-score">{{ bd.moon_score | int }}/100</span>
+      </div>
+
+      <!-- 銀河仰角 -->
+      <div class="metric">
+        <span class="metric-icon">🔭</span>
+        <span class="metric-label">銀河</span>
+        <span class="metric-value">最高 {{ mw.max_altitude }}°</span>
+        <div class="bar-bg">
+          <div class="bar-fill bar-alt" style="width:{{ bd.altitude_score }}%"></div>
+        </div>
+        <span class="bar-score">{{ bd.altitude_score | int }}/100</span>
+      </div>
+
+      <!-- 黃金窗口 -->
+      <hr class="divider" />
+      {% if gold %}
+      <div class="golden-windows">
+        {% for start, end in gold %}
+        {% set mins = ((end - start).total_seconds() / 60) | int %}
+        <span class="golden-tag">
+          ⭐ {{ start.strftime('%H:%M') }} — {{ end.strftime('%H:%M') }}（{{ mins }} 分鐘）
+        </span>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="no-golden">⚠️ 無黃金時段（月光與銀河可見窗口未重疊）</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <!-- 其他地點簡表 -->
+    {% if result.candidates | length > result.top | length %}
+    <div class="others-section">
+      <div class="others-title">其他地點評分</div>
+      {% for item in result.candidates[result.top | length :] %}
+      <div class="other-row">
+        <span class="other-name">{{ item.location.name }}</span>
+        <span class="other-score">
+          {{ item.score | int }} 分 &nbsp;·&nbsp; 雲量 {{ item.weather.night_summary.avg_cloud }}%
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% endif %}
+
+    <div class="footer">
+      資料來源：Open-Meteo 天氣預報 ／ JPL DE421 星曆表<br/>
+      資料僅供參考，出發前請再次確認當日天氣
+    </div>
+
+  </div><!-- /page-content -->
+
+  <script>
+    /* ════════════════════════════════════════
+       動態星空系統
+       包含：閃爍星點、偶發流星、requestAnimationFrame 動畫迴圈
+    ════════════════════════════════════════ */
+    (function () {
+      const canvas = document.getElementById('stars');
+      const ctx    = canvas.getContext('2d');
+
+      function rand(min, max) { return Math.random() * (max - min) + min; }
+
+      /* ── 星點物件陣列 ── */
+      let stars = [];
+
+      function initStars() {
+        stars = [];
+        const total = Math.floor((canvas.width * canvas.height) / 2800);
+        for (let i = 0; i < total; i++) {
+          const x    = rand(0, canvas.width);
+          const y    = rand(0, canvas.height);
+          /* 靠近銀河帶（從左上到右下的斜帶）的星點亮一點 */
+          const band = Math.abs((x / canvas.width) - (y / canvas.height));
+          stars.push({
+            x,
+            y,
+            r:         rand(0.2, 1.5),
+            baseAlpha: band < 0.2 ? rand(0.5, 1.0) : rand(0.1, 0.5),
+            phase:     rand(0, Math.PI * 2),   /* 閃爍起始相位（錯開） */
+            speed:     rand(0.4, 1.6),          /* 閃爍速度（rad/s） */
+            hue:       Math.random() < 0.15 ? rand(40, 60) : rand(200, 235),
+          });
+        }
+      }
+
+      /* ── 流星物件陣列 ── */
+      let shooters = [];
+      let nextShoot = performance.now() + rand(2000, 5000);
+
+      function spawnShooter(now) {
+        /* 從畫面上方隨機位置，以約 30–50° 斜角往右下飛 */
+        const angle  = rand(28, 52) * Math.PI / 180;
+        const speed  = rand(400, 750);   /* px/s */
+        const length = rand(100, 220);   /* 拖尾長度 px */
+        shooters.push({
+          x:      rand(0.05, 0.85) * canvas.width,
+          y:      rand(0.00, 0.35) * canvas.height,
+          angle, speed, length,
+          born:   now,
+          life:   length / speed + 0.4,  /* 總生命（秒） */
+        });
+        nextShoot = now + rand(3500, 9000);
+      }
+
+      function drawShooters(now) {
+        for (let i = shooters.length - 1; i >= 0; i--) {
+          const s   = shooters[i];
+          const age = (now - s.born) / 1000;
+          if (age > s.life) { shooters.splice(i, 1); continue; }
+
+          /* 流星頭部位置 */
+          const dist = age * s.speed;
+          const hx   = s.x + dist * Math.cos(s.angle);
+          const hy   = s.y + dist * Math.sin(s.angle);
+          /* 拖尾起點 */
+          const tx   = hx - s.length * Math.cos(s.angle);
+          const ty   = hy - s.length * Math.sin(s.angle);
+
+          /* 淡入淡出：前 0.1s 淡入，後 0.3s 淡出 */
+          const fadeIn  = Math.min(age / 0.1, 1);
+          const fadeOut = Math.min((s.life - age) / 0.3, 1);
+          const alpha   = fadeIn * fadeOut * 0.85;
+
+          const grad = ctx.createLinearGradient(tx, ty, hx, hy);
+          grad.addColorStop(0, `rgba(255,255,255,0)`);
+          grad.addColorStop(0.7, `rgba(200,220,255,${alpha * 0.5})`);
+          grad.addColorStop(1, `rgba(255,255,255,${alpha})`);
+
+          ctx.beginPath();
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(hx, hy);
+          ctx.strokeStyle = grad;
+          ctx.lineWidth   = rand(0.8, 1.8);
+          ctx.stroke();
+
+          /* 頭部光點 */
+          ctx.beginPath();
+          ctx.arc(hx, hy, 1.5, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          ctx.fill();
+        }
+      }
+
+      /* ── 主動畫迴圈 ── */
+      function animate(now) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const t = now / 1000;  /* 秒 */
+
+        /* 繪製閃爍星點 */
+        for (const s of stars) {
+          /* 用 sine 波模擬閃爍，每顆星相位不同，不會同步閃 */
+          const alpha = s.baseAlpha * (0.55 + 0.45 * Math.sin(t * s.speed + s.phase));
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${s.hue}, 80%, 92%, ${alpha})`;
+          ctx.fill();
+        }
+
+        /* 偶發流星 */
+        if (now >= nextShoot) spawnShooter(now);
+        drawShooters(now);
+
+        requestAnimationFrame(animate);
+      }
+
+      /* ── 視窗縮放時重建星點 ── */
+      function resize() {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+        initStars();
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+      requestAnimationFrame(animate);
+    })();
+
+    /* ── 查詢中狀態 ── */
+    function showLoading() {
+      const btn = document.getElementById('submitBtn');
+      btn.disabled    = true;
+      btn.textContent = '⏳  查詢中…';
+      document.getElementById('loading').style.display = 'block';
+    }
+
+    /* ── 日期最小值設為今天 ── */
+    document.addEventListener('DOMContentLoaded', function () {
+      const today = new Date().toISOString().split('T')[0];
+      const d = document.querySelector('input[type="date"]');
+      if (d && !d.value) d.value = today;
+    });
+  </script>
+</body>
+</html>
