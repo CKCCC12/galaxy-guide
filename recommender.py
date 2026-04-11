@@ -73,7 +73,7 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
         }
 
     scored = []
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(_evaluate_location, loc): loc for loc in candidates}
         for future in as_completed(futures):
             loc = futures[future]

@@ -29,16 +29,15 @@ TW_TZ = pytz.timezone("Asia/Taipei")
 # 銀河系中心座標（J2000）
 GALACTIC_CENTER = Star(ra_hours=17.7611, dec_degrees=-29.0078)
 
-# 每次初始化時載入星曆表（第一次執行會下載 ~17MB 的 de421.bsp）
+# 星曆表在模組載入時只讀取一次，所有函式共用同一份實例
+# 避免每次呼叫都重新讀取 16MB 檔案造成記憶體浪費
+_ts = load.timescale()
+_eph = load("de421.bsp")
+
+
 def _load_ephemeris():
-    """
-    載入 JPL 星曆表與時間軸
-    de421.bsp 包含太陽、月球、行星的精確軌道資料
-    檔案需事先下載至專案目錄（約 16MB）
-    """
-    ts = load.timescale()
-    eph = load("de421.bsp")
-    return ts, eph
+    """回傳已快取的星曆表實例（不重複讀檔）"""
+    return _ts, _eph
 
 
 # ── 月相計算 ─────────────────────────────────────────────────
