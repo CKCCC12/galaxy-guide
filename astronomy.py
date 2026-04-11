@@ -137,9 +137,10 @@ def get_moon_schedule(lat: float, lon: float, target_date: date) -> dict:
     # 觀測位置
     observer = wgs84.latlon(lat, lon)
 
-    # 搜尋範圍：當天 18:00 到隔天 06:00（台灣時間）
-    t0 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 18, 0)))
-    t1 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 6, 0)))
+    # 搜尋範圍：當天 12:00 到隔天 14:00（26 小時）
+    # 擴大窗口以捕捉月落發生在 06:00 以後的情況（例如月亮深夜升起、隔天上午才落）
+    t0 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 12, 0)))
+    t1 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 14, 0)))
 
     # 找月升月落事件（0 = 落下, 1 = 升起）
     f = almanac.risings_and_settings(eph, eph["moon"], observer)
@@ -294,16 +295,16 @@ def _extract_windows(samples: list, threshold: float) -> list:
 def get_best_shooting_window(lat: float, lon: float, target_date: date) -> dict:
     """
     綜合計算最佳拍攝窗口：
-    「月亮在地平線下」與「銀河核心仰角 > 15°」的交集時段
 
-    這是 Agent 最主要呼叫的函式，整合所有天文資訊。
+    月光照明 < 30%（新月/眉月）：月亮不造成明顯光害，整段銀河可見窗口皆可拍攝
+    月光照明 ≥ 30%：需避開月亮在天上的時段，取暗夜 ∩ 銀河可見的交集
 
     Returns:
         {
             "moon": {...},          # 月相資訊
             "schedule": {...},      # 月升月落
             "milkyway": {...},      # 銀河核心窗口
-            "golden_windows": [...],# 最終最佳時段（交集）
+            "golden_windows": [...],# 最終最佳時段
             "summary": str,         # 給人看的中文摘要
         }
     """
@@ -311,11 +312,15 @@ def get_best_shooting_window(lat: float, lon: float, target_date: date) -> dict:
     moon_schedule = get_moon_schedule(lat, lon, target_date)
     mw_info = get_milkyway_window(lat, lon, target_date)
 
-    # 計算交集：暗夜時段 ∩ 銀河可見時段
-    golden_windows = _intersect_windows(
-        moon_schedule["dark_hours"],
-        mw_info["visible_window"],
-    )
+    if moon_info["illumination"] < 0.30:
+        # 月光弱，不影響拍攝，直接用銀河可見窗口
+        golden_windows = list(mw_info["visible_window"])
+    else:
+        # 月光強，取暗夜時段 ∩ 銀河可見時段
+        golden_windows = _intersect_windows(
+            moon_schedule["dark_hours"],
+            mw_info["visible_window"],
+        )
 
     # 產生中文摘要
     summary = _build_summary(moon_info, moon_schedule, mw_info, golden_windows)
@@ -379,10 +384,10 @@ def _build_summary(moon_info, moon_schedule, mw_info, golden_windows) -> str:
             duration_min = int((end - start).total_seconds() / 60)
             lines.append(f"  {_fmt_time(start)} — {_fmt_time(end)}（約 {duration_min} 分鐘）")
     else:
-        if not moon_info["is_suitable"]:
-            lines.append("❌ 月光太強（照明 > 30%），不適合拍攝銀河")
-        elif not mw_info["visible_window"]:
+        if not mw_info["visible_window"]:
             lines.append("❌ 本日銀河核心未升至 15° 以上")
+        elif not moon_info["is_suitable"]:
+            lines.append("❌ 月光太強（照明 > 30%），月落前無拍攝機會")
         else:
             lines.append("❌ 月亮與銀河核心可見時段無交集，本夜不適合")
 

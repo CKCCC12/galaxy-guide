@@ -1,17 +1,29 @@
 # weather.py
-# 天氣查詢模組：串接 Open-Meteo 免費 API 取得雲量資料
+# 天氣查詢模組：串接 Open-Meteo 免費 API 取得雲量、能見度、空氣品質資料
 #
 # 為什麼用 Open-Meteo？
 #   - 完全免費，無需 API 金鑰
 #   - 提供逐小時雲量（cloud_cover），精度 1%
 #   - 支援高/中/低雲層分別查詢（低雲最影響能見度）
+#   - 提供能見度（visibility）、氣膠光學厚度（AOD）、沙塵、濕度預報
 #   - 可查未來 7 天預報，適合週末規劃
 #
 # 雲量判斷標準（適合拍銀河）：
-#   0-20%  ☆☆☆ 絕佳，銀河清晰可見
-#   21-40% ☆☆  良好，偶有薄雲不影響整體
-#   41-60% ☆   普通，銀河模糊，慎重考慮
-#   61%+   ✗   不建議，雲層遮蔽銀河
+#   0-20%  ☆☆  良好，銀河清晰可見
+#   21-40% ☆   普通，有薄雲干擾，仍可嘗試
+#   41%+   ✗   不建議，雲層遮蔽銀河
+#
+# 能見度判斷標準（大氣透明度）：
+#   > 20km  極佳，大氣非常透明
+#   10-20km 良好，星光清晰
+#   5-10km  普通，有霾，稍微影響
+#   < 5km   不佳，霾/霧嚴重
+#
+# AOD（氣膠光學厚度）判斷標準：
+#   < 0.1   極佳，幾乎無懸浮粒子
+#   0.1-0.2 良好
+#   0.2-0.3 普通，銀河明顯受影響
+#   ≥ 0.3   0 分，不建議（計分門檻）
 
 import urllib.request
 import json
@@ -26,10 +38,8 @@ API_URL = "https://api.open-meteo.com/v1/forecast"
 
 def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
     """
-    查詢指定座標、日期的逐小時雲量預報
-
-    Open-Meteo 回傳的 cloud_cover 是 0-100 的整數，代表天空被雲覆蓋的百分比。
-    另外查詢低雲（cloud_cover_low）—— 低雲比高雲更影響拍攝，因為又厚又密。
+    查詢指定座標、日期的逐小時天氣預報
+    包含：雲量、能見度、氣膠光學厚度、沙塵濃度、相對濕度
 
     Args:
         lat: 緯度
@@ -38,44 +48,26 @@ def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
 
     Returns:
         {
-            "hourly": [
-                {
-                    "time": datetime,       # 台灣時間
-                    "cloud_cover": int,     # 總雲量 0-100%
-                    "cloud_low": int,       # 低雲量 0-100%
-                    "rating": str,          # 評級：絕佳/良好/普通/不建議
-                    "suitable": bool,       # 是否適合拍攝
-                }
-            ],
-            "night_summary": {...},         # 20:00-05:00 的夜間摘要
-            "best_hours": [...],            # 雲量 < 40% 的時段
+            "hourly": [...],            # 所有小時資料
+            "night_hours": [...],       # 夜間時段（20:00~05:00）
+            "night_summary": {...},     # 夜間統計摘要
+            "best_hours": [...],        # 雲量 < 40% 的連續時段
         }
     """
-    # 組合 API 查詢參數
     params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "cloud_cover,cloud_cover_low",
+        "hourly": "cloud_cover,cloud_cover_low,visibility,aerosol_optical_depth,dust,relative_humidity_2m",
         "timezone": "Asia/Taipei",
         "start_date": target_date.strftime("%Y-%m-%d"),
-        # 查隔天也一起帶進來（因為拍攝跨越午夜）
         "end_date": (target_date + timedelta(days=1)).strftime("%Y-%m-%d"),
         "wind_speed_unit": "kmh",
     }
 
-    # 發送 HTTP 請求
     raw_data = _fetch_api(params)
-
-    # 解析回傳資料
     hourly_data = _parse_hourly(raw_data, target_date)
-
-    # 篩選出夜間時段（當天 20:00 到隔天 05:00）
     night_hours = _filter_night_hours(hourly_data, target_date)
-
-    # 計算夜間摘要統計
     night_summary = _calc_night_summary(night_hours)
-
-    # 找出適合拍攝的連續時段
     best_hours = _find_best_windows(night_hours)
 
     return {
@@ -91,10 +83,7 @@ def _fetch_api(params: dict) -> dict:
     發送 GET 請求到 Open-Meteo API
 
     Python 內建的 urllib 不需要安裝額外套件。
-    URL 格式範例：
-      https://api.open-meteo.com/v1/forecast?latitude=23.14&longitude=121.42&...
     """
-    # 把 dict 轉成 URL query string
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
 
@@ -115,65 +104,115 @@ def _parse_hourly(raw_data: dict, target_date: date) -> list:
     Open-Meteo 回傳格式：
     {
         "hourly": {
-            "time": ["2026-04-11T00:00", "2026-04-11T01:00", ...],
-            "cloud_cover": [10, 25, 40, ...],
-            "cloud_cover_low": [5, 10, 20, ...]
+            "time": ["2026-04-11T00:00", ...],
+            "cloud_cover": [10, 25, ...],
+            "cloud_cover_low": [5, 10, ...],
+            "visibility": [24140, 18000, ...],      # 單位：公尺
+            "aerosol_optical_depth": [0.08, 0.12, ...],
+            "dust": [2.1, 3.5, ...],                # 單位：μg/m³
+            "relative_humidity_2m": [65, 72, ...]   # 單位：%
         }
     }
     """
-    times = raw_data["hourly"]["time"]
-    cloud_cover = raw_data["hourly"]["cloud_cover"]
-    cloud_low = raw_data["hourly"]["cloud_cover_low"]
+    h = raw_data["hourly"]
+    times = h["time"]
+    cloud_cover = h["cloud_cover"]
+    cloud_low = h["cloud_cover_low"]
+    visibility = h.get("visibility", [None] * len(times))
+    aod = h.get("aerosol_optical_depth", [None] * len(times))
+    dust = h.get("dust", [None] * len(times))
+    humidity = h.get("relative_humidity_2m", [None] * len(times))
 
     result = []
     for i, time_str in enumerate(times):
-        # 解析時間字串 "2026-04-11T20:00" → datetime
         dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M")
         dt = TW_TZ.localize(dt)
 
         cc = cloud_cover[i] if cloud_cover[i] is not None else 100
         cl = cloud_low[i] if cloud_low[i] is not None else 100
+        vis = visibility[i] if visibility[i] is not None else 0
+        aod_val = aod[i] if aod[i] is not None else 0.5
+        dust_val = dust[i] if dust[i] is not None else 0.0
+        hum = humidity[i] if humidity[i] is not None else 0
+
+        # 逐小時銀河可見分數（與綜合評分同公式，不含月光/仰角）
+        vis_km = vis / 1000
+        _cloud_s = max(0.0, (100 - cc) / 100)
+        _aod_s   = max(0.0, 1.0 - aod_val / 0.3)
+        if vis_km >= 20:   _vis_s = 1.0
+        elif vis_km >= 10: _vis_s = 0.7
+        elif vis_km >= 5:  _vis_s = 0.3
+        else:              _vis_s = 0.0
+        hour_score = round((_cloud_s * 0.40 + _aod_s * 0.30 + _vis_s * 0.30) * 100)
 
         result.append({
             "time": dt,
             "cloud_cover": cc,
             "cloud_low": cl,
-            "rating": _get_rating(cc, cl),
+            "visibility_m": vis,
+            "visibility_km": round(vis / 1000, 1),
+            "aod": round(aod_val, 3),
+            "dust": round(dust_val, 1),
+            "humidity": hum,
+            "rating": _get_rating(cc, cl, vis, aod_val),
             "suitable": cc <= 40,
+            "warnings": _get_warnings(dust_val, hum),
+            "hour_score": hour_score,
         })
 
     return result
 
 
-def _get_rating(cloud_cover: int, cloud_low: int) -> str:
+def _get_rating(cloud_cover: int, cloud_low: int, visibility_m: float, aod: float) -> str:
     """
-    依總雲量與低雲量給出拍攝評級
+    依雲量、低雲、能見度、AOD 綜合給出逐小時評級
 
-    低雲的影響比高雲更大：
-    - 高雲（卷雲）薄而透，有時仍可見到銀河
-    - 低雲（積雲、層雲）又厚又不透明，基本上遮死銀河
+    優先判斷最嚴重的限制因素：
+    - 低雲 > 能見度 > 雲量 > AOD
     """
     # 低雲嚴重時直接降級
     if cloud_low >= 30:
-        if cloud_cover <= 40:
-            return "普通（低雲偏多）"
-        return "不建議（低雲遮蔽）"
+        return "不建議（低雲遮蔽）" if cloud_cover > 20 else "普通（低雲偏多）"
 
+    # 能見度極差
+    if visibility_m < 5000:
+        return "不建議（能見度極差）"
+
+    # 雲量基礎評級
     if cloud_cover <= 20:
-        return "絕佳"
+        base = "良好"
     elif cloud_cover <= 40:
-        return "良好"
-    elif cloud_cover <= 60:
-        return "普通"
+        base = "普通"
     else:
         return "不建議"
+
+    # AOD 附加說明
+    if aod >= 0.3:
+        return f"{base}（AOD 偏高）"
+    if visibility_m < 10000:
+        return f"{base}（能見度偏低）"
+
+    return base
+
+
+def _get_warnings(dust: float, humidity: int) -> list:
+    """回傳需特別注意的警告清單"""
+    warnings = []
+    if dust >= 50:
+        warnings.append("⚠️ 沙塵偏高")
+    elif dust >= 20:
+        warnings.append("⚠️ 輕微沙塵")
+    if humidity >= 90:
+        warnings.append("💧 注意結露")
+    elif humidity >= 85:
+        warnings.append("💧 濕度偏高")
+    return warnings
 
 
 def _filter_night_hours(hourly_data: list, target_date: date) -> list:
     """篩選出夜間觀測時段：當天 20:00 到隔天 05:00"""
     night_start = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 20, 0))
     night_end = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 5, 0))
-
     return [h for h in hourly_data if night_start <= h["time"] <= night_end]
 
 
@@ -183,11 +222,16 @@ def _calc_night_summary(night_hours: list) -> dict:
 
     Returns:
         {
-            "avg_cloud": float,     # 平均雲量
-            "min_cloud": int,       # 最低雲量
-            "max_cloud": int,       # 最高雲量
-            "suitable_hours": int,  # 雲量 ≤ 40% 的小時數
-            "overall_rating": str,  # 整體評級
+            "avg_cloud": float,
+            "min_cloud": int,
+            "max_cloud": int,
+            "suitable_hours": int,
+            "overall_rating": str,
+            "avg_visibility_km": float,
+            "min_visibility_km": float,
+            "avg_aod": float,
+            "max_humidity": int,
+            "max_dust": float,
         }
     """
     if not night_hours:
@@ -195,8 +239,13 @@ def _calc_night_summary(night_hours: list) -> dict:
 
     covers = [h["cloud_cover"] for h in night_hours]
     suitable = sum(1 for h in night_hours if h["suitable"])
-
     avg = sum(covers) / len(covers)
+
+    vis_list = [h["visibility_km"] for h in night_hours]
+    aod_list = [h["aod"] for h in night_hours]
+    hum_list = [h["humidity"] for h in night_hours]
+    dust_list = [h["dust"] for h in night_hours]
+
     overall = _get_overall_rating(avg, suitable, len(night_hours))
 
     return {
@@ -206,6 +255,11 @@ def _calc_night_summary(night_hours: list) -> dict:
         "suitable_hours": suitable,
         "total_hours": len(night_hours),
         "overall_rating": overall,
+        "avg_visibility_km": round(sum(vis_list) / len(vis_list), 1),
+        "min_visibility_km": round(min(vis_list), 1),
+        "avg_aod": round(sum(aod_list) / len(aod_list), 3),
+        "max_humidity": max(hum_list),
+        "max_dust": round(max(dust_list), 1),
     }
 
 
@@ -213,14 +267,10 @@ def _get_overall_rating(avg_cloud: float, suitable_hours: int, total_hours: int)
     """依整晚平均雲量給出整體評級"""
     suitable_ratio = suitable_hours / total_hours if total_hours > 0 else 0
 
-    if avg_cloud <= 20 and suitable_ratio >= 0.8:
-        return "絕佳（整晚幾乎無雲）"
-    elif avg_cloud <= 35 and suitable_ratio >= 0.6:
-        return "良好（多數時段晴朗）"
-    elif suitable_ratio >= 0.4:
+    if avg_cloud <= 20 and suitable_ratio >= 0.7:
+        return "良好（整晚多為晴空）"
+    elif avg_cloud <= 40 and suitable_ratio >= 0.4:
         return "普通（部分時段有機會）"
-    elif suitable_ratio >= 0.2:
-        return "偏差（僅少數時段有機會）"
     else:
         return "不建議（雲層厚重）"
 
@@ -229,18 +279,8 @@ def _find_best_windows(night_hours: list) -> list:
     """
     找出雲量 ≤ 40% 的連續時段（最佳拍攝窗口）
 
-    邏輯與 astronomy.py 的 _extract_windows 類似：
-    掃描每小時資料，找出連續適合的時段。
-
     Returns:
-        [
-            {
-                "start": datetime,
-                "end": datetime,
-                "avg_cloud": float,
-                "duration_hours": float,
-            }
-        ]
+        [{"start": datetime, "end": datetime, "avg_cloud": float, "duration_hours": float}]
     """
     windows = []
     in_window = False
@@ -265,7 +305,6 @@ def _find_best_windows(night_hours: list) -> list:
             })
             window_clouds = []
 
-    # 如果掃到結尾仍在窗口內
     if in_window and window_start and night_hours:
         last = night_hours[-1]
         duration = (last["time"] - window_start).total_seconds() / 3600 + 1
@@ -281,9 +320,7 @@ def _find_best_windows(night_hours: list) -> list:
 
 def format_weather_report(forecast: dict) -> str:
     """
-    將天氣查詢結果格式化為人類可讀的中文報告
-
-    這個函式供 Agent 在組合最終推薦時呼叫
+    將天氣查詢結果格式化為人類可讀的中文報告（含能見度、AOD、濕度）
     """
     lines = []
     s = forecast["night_summary"]
@@ -291,6 +328,12 @@ def format_weather_report(forecast: dict) -> str:
     lines.append(f"整晚天氣評估：{s['overall_rating']}")
     lines.append(f"雲量範圍：{s['min_cloud']}% ~ {s['max_cloud']}%（平均 {s['avg_cloud']}%）")
     lines.append(f"適合拍攝時數：{s['suitable_hours']} / {s['total_hours']} 小時")
+    lines.append(f"平均能見度：{s.get('avg_visibility_km', '?')} km（最低 {s.get('min_visibility_km', '?')} km）")
+    lines.append(f"平均 AOD：{s.get('avg_aod', '?')}（氣膠光學厚度）")
+    lines.append(f"最高濕度：{s.get('max_humidity', '?')}%")
+
+    if s.get("max_dust", 0) >= 20:
+        lines.append(f"⚠️  最高沙塵濃度：{s.get('max_dust')} μg/m³")
 
     if forecast["best_hours"]:
         lines.append("晴朗時段（雲量 ≤ 40%）：")
@@ -301,12 +344,22 @@ def format_weather_report(forecast: dict) -> str:
     else:
         lines.append("❌ 整晚雲量偏高，無適合拍攝時段")
 
-    lines.append("\n逐小時雲量（夜間）：")
+    lines.append("\n逐小時天氣（夜間）：")
+    lines.append(f"  {'時間':5}  {'雲量':22}  {'能見度':>7}  {'AOD':>6}  {'濕度':>4}  評級")
+    lines.append("  " + "-" * 72)
     for h in forecast["night_hours"]:
         bar_len = h["cloud_cover"] // 5
         bar = "█" * bar_len + "░" * (20 - bar_len)
         time_str = h["time"].strftime("%H:%M")
-        lines.append(f"  {time_str}  [{bar}] {h['cloud_cover']:3d}%  {h['rating']}")
+        warnings = " ".join(h["warnings"]) if h["warnings"] else ""
+        lines.append(
+            f"  {time_str}  [{bar}] {h['cloud_cover']:3d}%"
+            f"  {h['visibility_km']:>5.1f}km"
+            f"  {h['aod']:>5.3f}"
+            f"  {h['humidity']:>3d}%"
+            f"  {h['rating']}"
+            f"  {warnings}"
+        )
 
     return "\n".join(lines)
 
@@ -315,23 +368,21 @@ def format_weather_report(forecast: dict) -> str:
 if __name__ == "__main__":
     from datetime import date, timedelta
 
-    # 找下一個週六
     today = date.today()
     days_until_saturday = (5 - today.weekday()) % 7
     if days_until_saturday == 0:
         days_until_saturday = 7
     saturday = today + timedelta(days=days_until_saturday)
 
-    # 以台東三仙台座標測試
     LAT = 23.1406
     LON = 121.4197
 
-    print(f"🌤️  天氣查詢測試")
-    print(f"📅 日期：{saturday}（週六）")
-    print(f"📍 地點：台東三仙台（{LAT}°N, {LON}°E）\n")
+    print(f"天氣查詢測試")
+    print(f"日期：{saturday}（週六）")
+    print(f"地點：台東三仙台（{LAT}°N, {LON}°E）\n")
 
     forecast = get_cloud_forecast(LAT, LON, saturday)
 
-    print("=" * 55)
+    print("=" * 75)
     print(format_weather_report(forecast))
-    print("=" * 55)
+    print("=" * 75)

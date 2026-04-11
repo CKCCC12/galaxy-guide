@@ -7,6 +7,7 @@
 from flask import Flask, render_template, request
 from datetime import date, timedelta, datetime
 from recommender import recommend, build_report
+from weather import TW_TZ
 
 app = Flask(__name__)
 
@@ -14,16 +15,14 @@ app = Flask(__name__)
 @app.route("/", methods=["GET"])
 def index():
     """顯示查詢表單（首頁）"""
-    # 預設日期：下一個週六
     today = date.today()
-    days_until_saturday = (5 - today.weekday()) % 7
-    if days_until_saturday == 0:
-        days_until_saturday = 7
-    default_date = today + timedelta(days=days_until_saturday)
+    default_date = today
+    max_date = today + timedelta(days=7)
 
     return render_template(
         "index.html",
         default_date=default_date.strftime("%Y-%m-%d"),
+        max_date=max_date.strftime("%Y-%m-%d"),
         result=None,
         error=None,
     )
@@ -35,8 +34,10 @@ def get_recommendation():
     # 讀取表單參數
     date_str = request.form.get("date", "")
     region = request.form.get("region", "").strip()
-    bortle = int(request.form.get("bortle", 4))
+    bortle = 4
     top_n = int(request.form.get("top_n", 3))
+
+    max_date = date.today() + timedelta(days=7)
 
     # 驗證日期格式
     try:
@@ -45,6 +46,7 @@ def get_recommendation():
         return render_template(
             "index.html",
             default_date=date_str,
+            max_date=max_date.strftime("%Y-%m-%d"),
             result=None,
             error=f"日期格式錯誤：{date_str}，請使用 YYYY-MM-DD 格式",
         )
@@ -67,20 +69,26 @@ def get_recommendation():
                 )
             # 若找不到指定區域，顯示全部結果
 
+        # 查詢今天才標記當前時段，查詢未來日期無意義
+        now_tw = datetime.now(TW_TZ)
+        current_hour = now_tw.hour if target_date == date.today() else None
+
         return render_template(
             "index.html",
             default_date=date_str,
+            max_date=max_date.strftime("%Y-%m-%d"),
             result=result,
             error=None,
             selected_region=region,
-            selected_bortle=bortle,
             selected_top_n=top_n,
+            current_hour=current_hour,
         )
 
     except Exception as e:
         return render_template(
             "index.html",
             default_date=date_str,
+            max_date=max_date.strftime("%Y-%m-%d"),
             result=None,
             error=f"查詢失敗：{str(e)}",
         )
