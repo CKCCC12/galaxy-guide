@@ -25,7 +25,14 @@ import urllib.request
 import json
 import math
 import os
+import ssl
 from typing import Optional
+
+# data.moenv.gov.tw 的 SSL 憑證與 CWA 同樣有已知相容性問題，
+# 建立不驗證憑證的 context 繞過（僅用於此可信任的政府來源）
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # 自動載入專案根目錄的 .env 檔案
 # dotenv_values 只在 python-dotenv 有安裝時才生效；
@@ -118,7 +125,7 @@ def _fetch_all_stations(api_key: str) -> list:
     req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as response:
             raw = response.read().decode("utf-8")
             data = json.loads(raw)
             # API 可能回傳陣列或 {"records": [...]}
