@@ -15,7 +15,7 @@ app = Flask(__name__)
 @app.route("/", methods=["GET"])
 def index():
     """顯示查詢表單（首頁）"""
-    today = date.today()
+    today = datetime.now(TW_TZ).date()
     default_date = today
     max_date = today + timedelta(days=7)
 
@@ -37,7 +37,7 @@ def get_recommendation():
     bortle = 4
     top_n = int(request.form.get("top_n", 3))
 
-    max_date = date.today() + timedelta(days=7)
+    max_date = datetime.now(TW_TZ).date() + timedelta(days=7)
 
     # 驗證日期格式
     try:
@@ -71,7 +71,7 @@ def get_recommendation():
 
         # 查詢今天才標記當前時段，查詢未來日期無意義
         now_tw = datetime.now(TW_TZ)
-        current_hour = now_tw.hour if target_date == date.today() else None
+        current_hour = now_tw.hour if target_date == now_tw.date() else None
 
         return render_template(
             "index.html",
