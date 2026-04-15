@@ -26,6 +26,8 @@ import json
 import math
 import os
 import ssl
+import time
+import threading
 from typing import Optional
 
 # data.moenv.gov.tw 的 SSL 憑證與 CWA 同樣有已知相容性問題，
@@ -33,6 +35,15 @@ from typing import Optional
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
+
+# MOENV API 回應快取：同一次查詢（約 2 分鐘內）避免重複下載全台測站資料
+# 14 個地點各呼叫一次 = 14 次 HTTP 請求，快取後只需 1 次
+_CACHE_TTL = 120  # 快取有效秒數
+_cache_lock = threading.Lock()
+_cache: dict = {
+    "stations": None,
+    "stations_ts": 0.0,
+}
 
 # 自動載入專案根目錄的 .env 檔案
 # dotenv_values 只在 python-dotenv 有安裝時才生效；
@@ -101,7 +112,7 @@ def get_current_aqi(lat: float, lon: float) -> Optional[dict]:
 
 def _fetch_all_stations(api_key: str) -> list:
     """
-    從環境部 API 取得所有測站資料
+    從環境部 API 取得所有測站資料（含快取，避免 14 個地點重複下載）
 
     API 回傳格式：
     {
@@ -121,6 +132,10 @@ def _fetch_all_stations(api_key: str) -> list:
         ]
     }
     """
+    with _cache_lock:
+        if _cache["stations"] is not None and time.time() - _cache["stations_ts"] < _CACHE_TTL:
+            return _cache["stations"]
+
     url = f"{EPA_AQI_URL}?format=json&limit=200&api_key={api_key}"
     req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
 
@@ -130,8 +145,13 @@ def _fetch_all_stations(api_key: str) -> list:
             data = json.loads(raw)
             # API 可能回傳陣列或 {"records": [...]}
             if isinstance(data, list):
-                return data
-            return data.get("records", [])
+                stations = data
+            else:
+                stations = data.get("records", [])
+            with _cache_lock:
+                _cache["stations"] = stations
+                _cache["stations_ts"] = time.time()
+            return stations
     except Exception:
         return []
 
