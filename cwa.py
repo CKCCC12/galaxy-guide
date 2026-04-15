@@ -31,6 +31,8 @@ import json
 import math
 import os
 import ssl
+import time
+import threading
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -40,6 +42,18 @@ from typing import Optional
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
+
+# CWA API 回應快取：同一次查詢（約 2 分鐘內）避免重複下載全台縣市資料
+# 每次 get_pop_forecast / get_cloud_from_cwa 都需要全台資料，14 個地點 × 2 個欄位 = 28 次呼叫
+# 使用模組層級快取後只需呼叫 2 次（PoP 和 Wx 各一次）
+_CACHE_TTL = 120  # 快取有效秒數
+_cache_lock = threading.Lock()
+_cache: dict = {
+    "pop_locations": None,
+    "wx_locations": None,
+    "pop_ts": 0.0,
+    "wx_ts": 0.0,
+}
 
 try:
     from dotenv import load_dotenv
@@ -110,7 +124,7 @@ def get_pop_forecast(lat: float, lon: float, target_date: date) -> Optional[dict
 
 def _fetch_all_locations(api_key: str) -> list:
     """
-    從 CWA API 取得全台縣市的 12小時降雨機率資料
+    從 CWA API 取得全台縣市的 12小時降雨機率資料（含快取，避免重複下載）
 
     F-D0047-091 回傳結構：
     {
@@ -146,6 +160,10 @@ def _fetch_all_locations(api_key: str) -> list:
         }
     }
     """
+    with _cache_lock:
+        if _cache["pop_locations"] is not None and time.time() - _cache["pop_ts"] < _CACHE_TTL:
+            return _cache["pop_locations"]
+
     params = urllib.parse.urlencode({
         "Authorization": api_key,
         "format": "JSON",
@@ -161,6 +179,9 @@ def _fetch_all_locations(api_key: str) -> list:
             locations = []
             for group in data.get("records", {}).get("Locations", []):
                 locations.extend(group.get("Location", []))
+            with _cache_lock:
+                _cache["pop_locations"] = locations
+                _cache["pop_ts"] = time.time()
             return locations
     except Exception:
         return []
@@ -325,7 +346,11 @@ def get_cloud_from_cwa(lat: float, lon: float, target_date: date) -> Optional[di
 
 
 def _fetch_locations_wx(api_key: str) -> list:
-    """從 CWA API 取得全台縣市的天氣現象資料"""
+    """從 CWA API 取得全台縣市的天氣現象資料（含快取，避免重複下載）"""
+    with _cache_lock:
+        if _cache["wx_locations"] is not None and time.time() - _cache["wx_ts"] < _CACHE_TTL:
+            return _cache["wx_locations"]
+
     params = urllib.parse.urlencode({
         "Authorization": api_key,
         "format": "JSON",
@@ -341,6 +366,9 @@ def _fetch_locations_wx(api_key: str) -> list:
             locations = []
             for group in data.get("records", {}).get("Locations", []):
                 locations.extend(group.get("Location", []))
+            with _cache_lock:
+                _cache["wx_locations"] = locations
+                _cache["wx_ts"] = time.time()
             return locations
     except Exception:
         return []
