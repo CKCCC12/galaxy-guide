@@ -97,11 +97,16 @@ def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
 
 def _fetch_api(params: dict) -> dict:
     """
-    發送 GET 請求到 Open-Meteo API（含快取）
+    發送 GET 請求到 Open-Meteo API（含快取、SSL 降級、錯誤記錄）
 
     快取 key 由 lat / lon / start_date 組成，TTL 30 分鐘。
-    同一天查詢多個地點時，相同 key 的請求直接從快取回傳。
-    SSL context 繞過憑證驗證，解決 Render 環境下的 SSL 失敗問題。
+
+    嘗試策略（依序）：
+    1. 自訂 SSL context（繞過憑證驗證），timeout 25s
+       → 解決 Render 環境下 SSL CERTIFICATE_VERIFY_FAILED
+    2. 標準 SSL（系統預設 CA），timeout 30s
+       → 解決 1 的 context 本身引起的問題
+    每次失敗都印出錯誤類型供 Render 日誌診斷。
     """
     cache_key = (params.get("latitude"), params.get("longitude"), params.get("start_date"))
     with _cache_lock:
@@ -111,19 +116,46 @@ def _fetch_api(params: dict) -> dict:
 
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
-    req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
 
-    try:
-        with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as response:
-            raw = response.read().decode("utf-8")
+    last_error = None
+    strategies = [
+        ("SSL-bypass",  _SSL_CTX, 25),
+        ("SSL-default", None,     30),
+    ]
+
+    for label, ssl_ctx, timeout in strategies:
+        # ── 階段 1：HTTP 請求（僅捕捉網路/SSL 錯誤，允許換策略重試） ──
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
+            kw: dict = {"timeout": timeout}
+            if ssl_ctx is not None:
+                kw["context"] = ssl_ctx
+            with urllib.request.urlopen(req, **kw) as response:
+                raw = response.read().decode("utf-8")
+        except Exception as e:
+            print(f"[weather] {label} (timeout={timeout}s) 失敗: {type(e).__name__}: {e}")
+            last_error = e
+            continue  # 換下一個 SSL 策略重試
+
+        # ── 階段 2：JSON 解析（失敗直接往上拋，不重試） ──
+        try:
             data = json.loads(raw)
-            with _cache_lock:
-                _cache[cache_key] = {"data": data, "ts": time.time()}
-            return data
-    except urllib.error.URLError as e:
-        raise ConnectionError(f"無法連線到 Open-Meteo API：{e}")
-    except json.JSONDecodeError:
-        raise ValueError("Open-Meteo 回傳資料格式錯誤")
+        except json.JSONDecodeError as e:
+            print(f"[weather] Open-Meteo JSON 解析失敗: {e}")
+            raise ValueError(f"Open-Meteo 回傳資料格式錯誤: {e}")
+
+        # ── 階段 3：API 應用層錯誤（如參數錯誤，重試無益） ──
+        if isinstance(data, dict) and data.get("error"):
+            reason = data.get("reason", "未知原因")
+            print(f"[weather] Open-Meteo 拒絕請求: {reason}")
+            raise ValueError(f"Open-Meteo API 拒絕請求：{reason}")
+
+        with _cache_lock:
+            _cache[cache_key] = {"data": data, "ts": time.time()}
+        return data
+
+    print(f"[weather] Open-Meteo 所有策略均失敗，最後錯誤: {type(last_error).__name__}: {last_error}")
+    raise ConnectionError(f"無法連線到 Open-Meteo API：{last_error}")
 
 
 def _parse_hourly(raw_data: dict, target_date: date) -> list:
@@ -143,6 +175,10 @@ def _parse_hourly(raw_data: dict, target_date: date) -> list:
         }
     }
     """
+    if "hourly" not in raw_data:
+        # 印出實際收到的欄位，方便診斷 API 回應結構
+        print(f"[weather] Open-Meteo 回應缺少 hourly，收到欄位: {list(raw_data.keys())}")
+        raise ValueError(f"Open-Meteo 回應缺少 hourly 資料")
     h = raw_data["hourly"]
     times = h["time"]
     cloud_cover = h["cloud_cover"]
