@@ -26,6 +26,7 @@
 #   ≥ 0.3   0 分，不建議（計分門檻）
 
 import urllib.request
+import urllib.error
 import json
 import ssl
 import time
@@ -48,6 +49,14 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 _CACHE_TTL = 1800  # 30 分鐘
 _cache_lock = threading.Lock()
 _cache: dict = {}
+
+# 速率限制：Open-Meteo 免費版對每個 IP 有請求頻率上限。
+# 14 個地點同時查詢（3 個 worker）會短時間大量打同一個 API，
+# 導致 HTTP 429 Too Many Requests。
+# 用全域鎖確保兩次 Open-Meteo 請求至少間隔 0.5 秒。
+_rate_state: dict = {"last_ts": 0.0}
+_rate_lock = threading.Lock()
+_MIN_INTERVAL = 0.5  # 秒
 
 # Open-Meteo API 端點
 API_URL = "https://api.open-meteo.com/v1/forecast"
@@ -124,27 +133,58 @@ def _fetch_api(params: dict) -> dict:
     ]
 
     for label, ssl_ctx, timeout in strategies:
-        # ── 階段 1：HTTP 請求（僅捕捉網路/SSL 錯誤，允許換策略重試） ──
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
-            kw: dict = {"timeout": timeout}
-            if ssl_ctx is not None:
-                kw["context"] = ssl_ctx
-            with urllib.request.urlopen(req, **kw) as response:
-                raw = response.read().decode("utf-8")
-        except Exception as e:
-            print(f"[weather] {label} (timeout={timeout}s) 失敗: {type(e).__name__}: {e}")
-            last_error = e
-            continue  # 換下一個 SSL 策略重試
+        raw = None
 
-        # ── 階段 2：JSON 解析（失敗直接往上拋，不重試） ──
+        for attempt in range(3):  # 每種 SSL 策略最多重試 3 次（主要應對 429）
+            # ── 速率限制：確保兩次 Open-Meteo 請求至少間隔 0.5s ──
+            # 「預訂時間槽」模式：lock 只做計算，sleep 在 lock 外，
+            # 讓 3 個 worker 各自拿到不同的時間槽（t, t+0.5, t+1.0...），
+            # 不會同時發送，也不會因為 lock 內 sleep 而排隊堆疊。
+            with _rate_lock:
+                now = time.time()
+                next_ok = max(_rate_state["last_ts"] + _MIN_INTERVAL, now)
+                _rate_state["last_ts"] = next_ok   # 預訂這個時間槽
+            wait = next_ok - time.time()
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
+                kw: dict = {"timeout": timeout}
+                if ssl_ctx is not None:
+                    kw["context"] = ssl_ctx
+                with urllib.request.urlopen(req, **kw) as response:
+                    raw = response.read().decode("utf-8")
+                break  # HTTP 成功，跳出重試迴圈
+
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 2:
+                    # 429：依指數退避等待，再試一次
+                    wait = (attempt + 1) * 3  # 3s → 6s
+                    print(f"[weather] {label} attempt={attempt+1} 429 限流，等待 {wait}s 後重試...")
+                    time.sleep(wait)
+                    # 繼續下一次 attempt
+                else:
+                    print(f"[weather] {label} attempt={attempt+1} HTTP {e.code}: {e.reason}")
+                    last_error = e
+                    break
+
+            except Exception as e:
+                print(f"[weather] {label} attempt={attempt+1} 失敗: {type(e).__name__}: {e}")
+                last_error = e
+                break
+
+        if raw is None:
+            continue  # 此 SSL 策略全部失敗，試下一個
+
+        # ── JSON 解析（失敗直接往上拋，不換策略重試） ──
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
-            print(f"[weather] Open-Meteo JSON 解析失敗: {e}")
+            print(f"[weather] JSON 解析失敗: {e}")
             raise ValueError(f"Open-Meteo 回傳資料格式錯誤: {e}")
 
-        # ── 階段 3：API 應用層錯誤（如參數錯誤，重試無益） ──
+        # ── API 應用層錯誤（如參數錯誤，重試無益） ──
         if isinstance(data, dict) and data.get("error"):
             reason = data.get("reason", "未知原因")
             print(f"[weather] Open-Meteo 拒絕請求: {reason}")
