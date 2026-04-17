@@ -27,10 +27,27 @@
 
 import urllib.request
 import json
+import ssl
+import time
+import threading
 from datetime import date, datetime, timedelta
 import pytz
 
 TW_TZ = pytz.timezone("Asia/Taipei")
+
+# Render 上 Python 的 SSL 驗證對部分 API 會失敗，建立不驗證的 context
+# （與 cwa.py、airquality.py 相同做法）
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
+
+# Open-Meteo 逐小時資料快取
+# key: (lat, lon, date_str)，TTL 30 分鐘
+# 同一次查詢 14 個地點各自需要資料，快取後使用者重新整理或
+# 不同使用者查詢同一天，直接從記憶體取用，不再打 HTTP 請求
+_CACHE_TTL = 1800  # 30 分鐘
+_cache_lock = threading.Lock()
+_cache: dict = {}
 
 # Open-Meteo API 端點
 API_URL = "https://api.open-meteo.com/v1/forecast"
@@ -80,17 +97,29 @@ def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
 
 def _fetch_api(params: dict) -> dict:
     """
-    發送 GET 請求到 Open-Meteo API
+    發送 GET 請求到 Open-Meteo API（含快取）
 
-    Python 內建的 urllib 不需要安裝額外套件。
+    快取 key 由 lat / lon / start_date 組成，TTL 30 分鐘。
+    同一天查詢多個地點時，相同 key 的請求直接從快取回傳。
+    SSL context 繞過憑證驗證，解決 Render 環境下的 SSL 失敗問題。
     """
+    cache_key = (params.get("latitude"), params.get("longitude"), params.get("start_date"))
+    with _cache_lock:
+        entry = _cache.get(cache_key)
+        if entry and time.time() - entry["ts"] < _CACHE_TTL:
+            return entry["data"]
+
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
+    req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
 
     try:
-        with urllib.request.urlopen(url, timeout=20) as response:
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as response:
             raw = response.read().decode("utf-8")
-            return json.loads(raw)
+            data = json.loads(raw)
+            with _cache_lock:
+                _cache[cache_key] = {"data": data, "ts": time.time()}
+            return data
     except urllib.error.URLError as e:
         raise ConnectionError(f"無法連線到 Open-Meteo API：{e}")
     except json.JSONDecodeError:
