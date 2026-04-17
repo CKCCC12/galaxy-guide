@@ -211,8 +211,10 @@ def _get_warnings(dust: float, humidity: int) -> list:
 
 def _filter_night_hours(hourly_data: list, target_date: date) -> list:
     """篩選出夜間觀測時段：當天 20:00 到隔天 05:00"""
+    # 用 timedelta 計算隔天，避免月末 day+1 超出當月天數（如 4/30+1=31 會 crash）
+    next_day = target_date + timedelta(days=1)
     night_start = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 20, 0))
-    night_end = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 5, 0))
+    night_end   = TW_TZ.localize(datetime(next_day.year, next_day.month, next_day.day, 5, 0))
     return [h for h in hourly_data if night_start <= h["time"] <= night_end]
 
 

@@ -270,13 +270,16 @@
 
     /* ── 逐小時展開按鈕 ── */
     .hourly-toggle {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 0.76rem; color: #3a5a80; cursor: pointer;
+      display: flex; align-items: center; gap: 8px;
+      width: 100%; font-size: 0.82rem; color: #6090b8; cursor: pointer;
       margin-top: 12px; user-select: none;
-      background: none; border: none; padding: 0;
+      background: rgba(10, 25, 70, 0.55);
+      border: 1px solid rgba(40, 80, 170, 0.4);
+      border-radius: 10px; padding: 10px 14px;
+      text-align: left;
     }
-    .hourly-toggle:hover { color: #6090b8; }
-    .toggle-arrow { transition: transform 0.2s; }
+    .hourly-toggle:active { background: rgba(15, 35, 90, 0.7); }
+    .toggle-arrow { transition: transform 0.2s; flex-shrink: 0; }
     .toggle-arrow.open { transform: rotate(90deg); }
 
     /* ── 逐小時表格 ── */
@@ -625,6 +628,12 @@
                        {% elif h.hour_score >= 40 %}#c8b050
                        {% else %}#a04040{% endif %};
               ">{{ h.hour_score }}（{% if h.hour_score >= 80 %}良好{% elif h.hour_score >= 60 %}尚可{% elif h.hour_score >= 40 %}普通{% else %}不建議{% endif %}）</td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" style="text-align:center; color:#2a3a60; padding:16px 10px; font-size:0.78rem;">
+                天氣 API 暫時無法取得逐小時資料
+              </td>
             </tr>
             {% endfor %}
           </tbody>
