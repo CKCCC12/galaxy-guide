@@ -4,12 +4,47 @@
 # 把原本的 CLI 推薦系統包裝成網頁介面
 # 使用者可以在手機瀏覽器上查詢銀河拍攝推薦
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 from datetime import date, timedelta, datetime
 from recommender import recommend, build_report
 from weather import TW_TZ
 
 app = Flask(__name__)
+
+
+@app.route("/api-status")
+def api_status():
+    """診斷端點：測試每個外部 API 的連線狀態，直接顯示錯誤訊息"""
+    import urllib.request
+    import ssl
+    import json
+
+    results = {}
+
+    # 建立 SSL context（繞過驗證）
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    # 測試 Open-Meteo
+    try:
+        url = "https://api.open-meteo.com/v1/forecast?latitude=23.14&longitude=121.42&hourly=cloud_cover&timezone=Asia/Taipei&start_date=2026-04-17&end_date=2026-04-17"
+        req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
+        with urllib.request.urlopen(req, timeout=20, context=ssl_ctx) as r:
+            data = json.loads(r.read().decode())
+            results["open_meteo"] = {"status": "ok", "hours": len(data.get("hourly", {}).get("time", []))}
+    except Exception as e:
+        results["open_meteo"] = {"status": "error", "error": str(e)}
+
+    # 測試不加 SSL context 的 Open-Meteo（對比用）
+    try:
+        url = "https://api.open-meteo.com/v1/forecast?latitude=23.14&longitude=121.42&hourly=cloud_cover&timezone=Asia/Taipei&start_date=2026-04-17&end_date=2026-04-17"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            results["open_meteo_no_ssl_ctx"] = {"status": "ok"}
+    except Exception as e:
+        results["open_meteo_no_ssl_ctx"] = {"status": "error", "error": str(e)}
+
+    return jsonify(results)
 
 
 @app.route("/", methods=["GET"])
