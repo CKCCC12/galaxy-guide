@@ -88,7 +88,7 @@ def _fetch_api(params: dict) -> dict:
     url = f"{API_URL}?{query_string}"
 
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(url, timeout=20) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw)
     except urllib.error.URLError as e:

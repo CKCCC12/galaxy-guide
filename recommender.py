@@ -53,7 +53,28 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
 
     def _evaluate_location(loc):
         """單一地點的完整查詢與評分（供平行執行）"""
-        weather = get_cloud_forecast(loc["lat"], loc["lon"], target_date)
+        try:
+            weather = get_cloud_forecast(loc["lat"], loc["lon"], target_date)
+        except Exception as e:
+            print(f"    ⚠️  {loc['name']} Open-Meteo 失敗：{e}，以預設值評分")
+            weather = {
+                "hourly": [],
+                "night_hours": [],
+                "night_summary": {
+                    "avg_cloud": 100,
+                    "min_cloud": 100,
+                    "max_cloud": 100,
+                    "suitable_hours": 0,
+                    "total_hours": 0,
+                    "overall_rating": "無法取得（天氣 API 失敗）",
+                    "avg_visibility_km": 10,
+                    "min_visibility_km": 10,
+                    "avg_aod": 0.3,
+                    "max_humidity": 0,
+                    "max_dust": 0.0,
+                },
+                "best_hours": [],
+            }
         astro = get_best_shooting_window(loc["lat"], loc["lon"], target_date)
         aqi_data = get_current_aqi(loc["lat"], loc["lon"])
         pop_data = get_pop_forecast(loc["lat"], loc["lon"], target_date)
