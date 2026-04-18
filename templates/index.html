@@ -605,62 +605,11 @@
       <div class="hourly-table">
         {% if nights %}
         <div class="hourly-chart">
-          <canvas id="chart-{{ rank }}" height="160"></canvas>
+          <canvas id="chart-{{ rank }}" height="160"
+            data-labels='[{% for h in nights %}"{{ h.time.strftime("%H:%M") }}"{% if not loop.last %},{% endif %}{% endfor %}]'
+            data-scores='[{% for h in nights %}{{ h.hour_score }}{% if not loop.last %},{% endif %}{% endfor %}]'>
+          </canvas>
         </div>
-        <script>
-        (function(){
-          var labels = [{% for h in nights %}"{{ h.time.strftime('%H:%M') }}"{% if not loop.last %},{% endif %}{% endfor %}];
-          var scores = [{% for h in nights %}{{ h.hour_score }}{% if not loop.last %},{% endif %}{% endfor %}];
-          new Chart(document.getElementById('chart-{{ rank }}'), {
-            type: 'line',
-            plugins: [window._gwBgZone],
-            data: {
-              labels: labels,
-              datasets: [{
-                data: scores,
-                borderColor: '#5090d0',
-                backgroundColor: 'rgba(80,144,208,0.12)',
-                fill: true,
-                tension: 0.4,
-                pointRadius: 4,
-                pointHoverRadius: 7,
-                pointBackgroundColor: scores.map(function(s){
-                  return s >= 80 ? '#60d080' : s >= 60 ? '#c8b050' : '#a04040';
-                }),
-                pointBorderColor: 'transparent'
-              }]
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: {
-                legend: { display: false },
-                tooltip: {
-                  callbacks: {
-                    title: function(items){ return items[0].label; },
-                    label: function(item){
-                      var s = item.raw;
-                      var g = s >= 80 ? '良好' : s >= 60 ? '普通' : '不建議';
-                      return '銀河可見分數：' + s + '（' + g + '）';
-                    }
-                  }
-                }
-              },
-              scales: {
-                x: {
-                  grid: { color: 'rgba(80,120,200,0.15)' },
-                  ticks: { color: '#6080a0', font: { size: 11 } }
-                },
-                y: {
-                  min: 0, max: 100,
-                  grid: { color: 'rgba(80,120,200,0.15)' },
-                  ticks: { color: '#6080a0', font: { size: 11 }, stepSize: 20 }
-                }
-              }
-            }
-          });
-        })();
-        </script>
         {% endif %}
         <table>
           <thead>
@@ -757,6 +706,12 @@
       const arrow  = btn.querySelector('.toggle-arrow');
       const isOpen = table.classList.toggle('show');
       arrow.classList.toggle('open', isOpen);
+      if (isOpen) {
+        const canvas = table.querySelector('canvas[id^="chart-"]');
+        if (canvas && window._charts && window._charts[canvas.id]) {
+          window._charts[canvas.id].resize();
+        }
+      }
     }
 
     /* ════════════════════════════════════════
@@ -896,6 +851,61 @@
       const today = new Date().toISOString().split('T')[0];
       const d = document.querySelector('input[type="date"]');
       if (d && !d.value) d.value = today;
+
+      /* ── 初始化所有趨勢圖 ── */
+      window._charts = {};
+      document.querySelectorAll('canvas[id^="chart-"]').forEach(function(canvas) {
+        const labels = JSON.parse(canvas.dataset.labels);
+        const scores = JSON.parse(canvas.dataset.scores);
+        window._charts[canvas.id] = new Chart(canvas, {
+          type: 'line',
+          plugins: [window._gwBgZone],
+          data: {
+            labels: labels,
+            datasets: [{
+              data: scores,
+              borderColor: '#5090d0',
+              backgroundColor: 'rgba(80,144,208,0.12)',
+              fill: true,
+              tension: 0.4,
+              pointRadius: 4,
+              pointHoverRadius: 7,
+              pointBackgroundColor: scores.map(function(s) {
+                return s >= 80 ? '#60d080' : s >= 60 ? '#c8b050' : '#a04040';
+              }),
+              pointBorderColor: 'transparent'
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  title: function(items) { return items[0].label; },
+                  label: function(item) {
+                    var s = item.raw;
+                    var g = s >= 80 ? '良好' : s >= 60 ? '普通' : '不建議';
+                    return '銀河可見分數：' + s + '（' + g + '）';
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                grid: { color: 'rgba(80,120,200,0.15)' },
+                ticks: { color: '#6080a0', font: { size: 11 } }
+              },
+              y: {
+                min: 0, max: 100,
+                grid: { color: 'rgba(80,120,200,0.15)' },
+                ticks: { color: '#6080a0', font: { size: 11 }, stepSize: 20 }
+              }
+            }
+          }
+        });
+      });
     });
   </script>
 </body>
