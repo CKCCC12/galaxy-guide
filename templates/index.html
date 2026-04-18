@@ -468,9 +468,9 @@
           </div>
         </div>
         {% if item.score >= 80 %}
-        <span class="score-level level-good">✓ 良好條件</span>
+        <span class="score-level level-good">✓ 良好</span>
         {% elif item.score >= 60 %}
-        <span class="score-level level-ok">— 普通條件</span>
+        <span class="score-level level-ok">— 普通</span>
         {% else %}
         <span class="score-level level-bad">✗ 不建議出發</span>
         {% endif %}
@@ -624,10 +624,9 @@
               <td style="
                 font-weight: 600;
                 color: {% if h.hour_score >= 80 %}#60d080
-                       {% elif h.hour_score >= 60 %}#90c860
-                       {% elif h.hour_score >= 40 %}#c8b050
+                       {% elif h.hour_score >= 60 %}#c8b050
                        {% else %}#a04040{% endif %};
-              ">{{ h.hour_score }}（{% if h.hour_score >= 80 %}良好{% elif h.hour_score >= 60 %}尚可{% elif h.hour_score >= 40 %}普通{% else %}不建議{% endif %}）</td>
+              ">{{ h.hour_score }}（{% if h.hour_score >= 80 %}良好{% elif h.hour_score >= 60 %}普通{% else %}不建議{% endif %}）</td>
             </tr>
             {% else %}
             <tr>
