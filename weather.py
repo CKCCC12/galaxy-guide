@@ -269,35 +269,16 @@ def _parse_hourly(raw_data: dict, target_date: date) -> list:
 
 
 def _get_rating(cloud_cover: int, cloud_low: int, visibility_m: float, aod: float) -> str:
-    """
-    依雲量、低雲、能見度、AOD 綜合給出逐小時評級
-
-    優先判斷最嚴重的限制因素：
-    - 低雲 > 能見度 > 雲量 > AOD
-    """
-    # 低雲嚴重時直接降級
-    if cloud_low >= 30:
-        return "不建議（低雲遮蔽）" if cloud_cover > 20 else "普通（低雲偏多）"
-
-    # 能見度極差
-    if visibility_m < 5000:
-        return "不建議（能見度極差）"
-
-    # 雲量基礎評級
-    if cloud_cover <= 20:
-        base = "良好"
-    elif cloud_cover <= 40:
-        base = "普通"
-    else:
+    """依雲量、低雲、能見度、AOD 綜合給出逐小時評級，回傳三等級之一"""
+    if cloud_low >= 30 and cloud_cover > 20:
         return "不建議"
-
-    # AOD 附加說明
-    if aod >= 0.3:
-        return f"{base}（AOD 偏高）"
-    if visibility_m < 10000:
-        return f"{base}（能見度偏低）"
-
-    return base
+    if visibility_m < 5000:
+        return "不建議"
+    if cloud_cover <= 20 and cloud_low < 30 and visibility_m >= 5000 and aod < 0.3:
+        return "良好"
+    if cloud_cover <= 40:
+        return "普通"
+    return "不建議"
 
 
 def _get_warnings(dust: float, humidity: int) -> list:
@@ -375,11 +356,11 @@ def _get_overall_rating(avg_cloud: float, suitable_hours: int, total_hours: int)
     suitable_ratio = suitable_hours / total_hours if total_hours > 0 else 0
 
     if avg_cloud <= 20 and suitable_ratio >= 0.7:
-        return "良好（整晚多為晴空）"
+        return "良好"
     elif avg_cloud <= 40 and suitable_ratio >= 0.4:
-        return "普通（部分時段有機會）"
+        return "普通"
     else:
-        return "不建議（雲層厚重）"
+        return "不建議出發"
 
 
 def _find_best_windows(night_hours: list) -> list:
