@@ -12,6 +12,16 @@ from weather import TW_TZ
 app = Flask(__name__)
 
 
+@app.route("/version")
+def version():
+    """部署驗證端點：回傳當前運行版本標記與關鍵函式是否存在"""
+    import weather
+    return jsonify({
+        "version": "batch-prefetch-v1",
+        "has_prefetch_weather_batch": hasattr(weather, "prefetch_weather_batch"),
+    })
+
+
 @app.route("/api-status")
 def api_status():
     """診斷端點：測試每個外部 API 的連線狀態，直接顯示錯誤訊息"""
