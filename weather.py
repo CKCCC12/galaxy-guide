@@ -58,6 +58,11 @@ _rate_state: dict = {"last_ts": 0.0}
 _rate_lock = threading.Lock()
 _MIN_INTERVAL = 0.5  # 秒
 
+# 批次預抓失敗的日期集合：當 prefetch_weather_batch 失敗（多半因 IP 級 429），
+# 把該日期 key 加進來，後續對同日期任何單地點查詢就立即 raise 不重試，
+# 避免 14 個地點各自重試把 gunicorn 120s timeout 用完造成 worker 被 SIGKILL。
+_BATCH_FAILED_DATES: set = set()
+
 # Open-Meteo API 端點
 API_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -92,7 +97,7 @@ def prefetch_weather_batch(coords: list, target_date: date) -> None:
                 to_fetch.append((lat, lon))
 
     if not to_fetch:
-        print(f"[weather batch] 全部 {len(coords)} 個地點已在快取，跳過")
+        print(f"[weather batch] 全部 {len(coords)} 個地點已在快取，跳過", flush=True)
         return
 
     lats = ",".join(str(lat) for lat, _ in to_fetch)
@@ -109,52 +114,39 @@ def prefetch_weather_batch(coords: list, target_date: date) -> None:
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
 
-    strategies = [
-        ("SSL-bypass",  _SSL_CTX, 30),
-        ("SSL-default", None,     35),
-    ]
-
+    # 縮短重試成本：單一 SSL 策略（繞過驗證版本，與 _fetch_api 同樣在 Render 環境最穩）、
+    # 單次 attempt、15s timeout。最壞情況也只花 15s 就放棄並標記。
+    print(f"[weather batch] 開始批次預抓 {len(to_fetch)} 個地點...", flush=True)
+    t0 = time.time()
     data = None
-    for label, ssl_ctx, timeout in strategies:
-        for attempt in range(2):  # 批次模式重試 2 次（4xx/5xx 通常重試無益）
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
-                kw: dict = {"timeout": timeout}
-                if ssl_ctx is not None:
-                    kw["context"] = ssl_ctx
-                with urllib.request.urlopen(req, **kw) as response:
-                    raw = response.read().decode("utf-8")
-                data = json.loads(raw)
-                break
-            except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < 1:
-                    print(f"[weather batch] {label} 429 限流，等 3s 後重試...")
-                    time.sleep(3)
-                    continue
-                print(f"[weather batch] {label} HTTP {e.code}: {e.reason}")
-                break
-            except Exception as e:
-                print(f"[weather batch] {label} 失敗：{type(e).__name__}: {e}")
-                break
-        if data is not None:
-            break
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+    except urllib.error.HTTPError as e:
+        print(f"[weather batch] HTTP {e.code}: {e.reason}（用時 {time.time()-t0:.1f}s）", flush=True)
+    except Exception as e:
+        print(f"[weather batch] 失敗 {type(e).__name__}: {e}（用時 {time.time()-t0:.1f}s）", flush=True)
 
     if data is None:
-        print(f"[weather batch] 批次失敗，後續將走單地點查詢")
+        # 標記此日期：後續 _fetch_api 對同日期的單地點查詢會立即 raise，避免重試把 timeout 用完
+        _BATCH_FAILED_DATES.add(start_date_str)
+        print(f"[weather batch] 批次失敗，已標記日期 {start_date_str}，後續單地點查詢將直接走預設值", flush=True)
         return
 
-    # 多座標 → list[dict]；單座標（理論不會走到，保險處理）→ dict
+    # 多座標 → list[dict]；單座標（保險處理）→ dict
     responses = data if isinstance(data, list) else [data]
 
     if len(responses) != len(to_fetch):
-        print(f"[weather batch] 警告：請求 {len(to_fetch)} 個座標，但回應 {len(responses)} 個")
+        print(f"[weather batch] 警告：請求 {len(to_fetch)} 個但回應 {len(responses)} 個", flush=True)
 
     with _cache_lock:
         for (lat, lon), resp in zip(to_fetch, responses):
             cache_key = (lat, lon, start_date_str)
             _cache[cache_key] = {"data": resp, "ts": time.time()}
 
-    print(f"[weather batch] 成功批次預抓 {len(responses)} 個地點天氣資料")
+    print(f"[weather batch] 成功批次預抓 {len(responses)} 個地點（用時 {time.time()-t0:.2f}s）", flush=True)
 
 
 def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
@@ -218,6 +210,13 @@ def _fetch_api(params: dict) -> dict:
         if entry and time.time() - entry["ts"] < _CACHE_TTL:
             return entry["data"]
 
+    # 若此日期已被 prefetch_weather_batch 標記為失敗（多半是 Open-Meteo IP 級限流），
+    # 不要再花時間單地點重試 — 14 個地點各重試一輪就會把 120s timeout 用完。
+    # 直接 raise 讓 recommender 的 _evaluate_location 走預設值 fallback。
+    start_date = params.get("start_date")
+    if start_date in _BATCH_FAILED_DATES:
+        raise ConnectionError(f"批次預抓已標記 {start_date} 失敗，跳過單地點查詢")
+
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
 
@@ -256,16 +255,16 @@ def _fetch_api(params: dict) -> dict:
                 if e.code == 429 and attempt < 2:
                     # 429：依指數退避等待，再試一次
                     wait = (attempt + 1) * 3  # 3s → 6s
-                    print(f"[weather] {label} attempt={attempt+1} 429 限流，等待 {wait}s 後重試...")
+                    print(f"[weather] {label} attempt={attempt+1} 429 限流，等待 {wait}s 後重試...", flush=True)
                     time.sleep(wait)
                     # 繼續下一次 attempt
                 else:
-                    print(f"[weather] {label} attempt={attempt+1} HTTP {e.code}: {e.reason}")
+                    print(f"[weather] {label} attempt={attempt+1} HTTP {e.code}: {e.reason}", flush=True)
                     last_error = e
                     break
 
             except Exception as e:
-                print(f"[weather] {label} attempt={attempt+1} 失敗: {type(e).__name__}: {e}")
+                print(f"[weather] {label} attempt={attempt+1} 失敗: {type(e).__name__}: {e}", flush=True)
                 last_error = e
                 break
 
@@ -276,20 +275,20 @@ def _fetch_api(params: dict) -> dict:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
-            print(f"[weather] JSON 解析失敗: {e}")
+            print(f"[weather] JSON 解析失敗: {e}", flush=True)
             raise ValueError(f"Open-Meteo 回傳資料格式錯誤: {e}")
 
         # ── API 應用層錯誤（如參數錯誤，重試無益） ──
         if isinstance(data, dict) and data.get("error"):
             reason = data.get("reason", "未知原因")
-            print(f"[weather] Open-Meteo 拒絕請求: {reason}")
+            print(f"[weather] Open-Meteo 拒絕請求: {reason}", flush=True)
             raise ValueError(f"Open-Meteo API 拒絕請求：{reason}")
 
         with _cache_lock:
             _cache[cache_key] = {"data": data, "ts": time.time()}
         return data
 
-    print(f"[weather] Open-Meteo 所有策略均失敗，最後錯誤: {type(last_error).__name__}: {last_error}")
+    print(f"[weather] Open-Meteo 所有策略均失敗，最後錯誤: {type(last_error).__name__}: {last_error}", flush=True)
     raise ConnectionError(f"無法連線到 Open-Meteo API：{last_error}")
 
 
@@ -312,7 +311,7 @@ def _parse_hourly(raw_data: dict, target_date: date) -> list:
     """
     if "hourly" not in raw_data:
         # 印出實際收到的欄位，方便診斷 API 回應結構
-        print(f"[weather] Open-Meteo 回應缺少 hourly，收到欄位: {list(raw_data.keys())}")
+        print(f"[weather] Open-Meteo 回應缺少 hourly，收到欄位: {list(raw_data.keys())}", flush=True)
         raise ValueError(f"Open-Meteo 回應缺少 hourly 資料")
     h = raw_data["hourly"]
     times = h["time"]
