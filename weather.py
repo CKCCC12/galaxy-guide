@@ -62,6 +62,101 @@ _MIN_INTERVAL = 0.5  # 秒
 API_URL = "https://api.open-meteo.com/v1/forecast"
 
 
+def prefetch_weather_batch(coords: list, target_date: date) -> None:
+    """
+    一次性批次預抓多個座標的天氣資料，寫入共用快取 _cache
+
+    Open-Meteo 免費版支援多座標查詢：
+      latitude=23.1,23.2,23.3&longitude=121.1,121.2,121.3
+    14 個地點變成 1 個 HTTP 請求，避免單地點循環時觸發 429 限流。
+
+    工作流程：
+      1. 過濾已在 _cache 內的座標（30 分鐘內查過的不再重抓）
+      2. 把剩下的座標串成一個批次請求
+      3. 成功 → 把每個地點的 JSON 拆開存進 _cache
+              （結構與 _fetch_api 寫入的格式一致，後續 get_cloud_forecast 自動命中快取）
+      4. 失敗 → 印錯誤訊息直接 return，後續 get_cloud_forecast 會走原本的單地點重試流程
+
+    coords: [(lat, lon), ...]
+    """
+    start_date_str = target_date.strftime("%Y-%m-%d")
+    end_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # 過濾已快取
+    to_fetch = []
+    with _cache_lock:
+        for lat, lon in coords:
+            cache_key = (lat, lon, start_date_str)
+            entry = _cache.get(cache_key)
+            if not (entry and time.time() - entry["ts"] < _CACHE_TTL):
+                to_fetch.append((lat, lon))
+
+    if not to_fetch:
+        print(f"[weather batch] 全部 {len(coords)} 個地點已在快取，跳過")
+        return
+
+    lats = ",".join(str(lat) for lat, _ in to_fetch)
+    lons = ",".join(str(lon) for _, lon in to_fetch)
+    params = {
+        "latitude": lats,
+        "longitude": lons,
+        "hourly": "cloud_cover,cloud_cover_low,visibility,aerosol_optical_depth,dust,relative_humidity_2m",
+        "timezone": "Asia/Taipei",
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "wind_speed_unit": "kmh",
+    }
+    query_string = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"{API_URL}?{query_string}"
+
+    strategies = [
+        ("SSL-bypass",  _SSL_CTX, 30),
+        ("SSL-default", None,     35),
+    ]
+
+    data = None
+    for label, ssl_ctx, timeout in strategies:
+        for attempt in range(2):  # 批次模式重試 2 次（4xx/5xx 通常重試無益）
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "galaxy-guide/1.0"})
+                kw: dict = {"timeout": timeout}
+                if ssl_ctx is not None:
+                    kw["context"] = ssl_ctx
+                with urllib.request.urlopen(req, **kw) as response:
+                    raw = response.read().decode("utf-8")
+                data = json.loads(raw)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 1:
+                    print(f"[weather batch] {label} 429 限流，等 3s 後重試...")
+                    time.sleep(3)
+                    continue
+                print(f"[weather batch] {label} HTTP {e.code}: {e.reason}")
+                break
+            except Exception as e:
+                print(f"[weather batch] {label} 失敗：{type(e).__name__}: {e}")
+                break
+        if data is not None:
+            break
+
+    if data is None:
+        print(f"[weather batch] 批次失敗，後續將走單地點查詢")
+        return
+
+    # 多座標 → list[dict]；單座標（理論不會走到，保險處理）→ dict
+    responses = data if isinstance(data, list) else [data]
+
+    if len(responses) != len(to_fetch):
+        print(f"[weather batch] 警告：請求 {len(to_fetch)} 個座標，但回應 {len(responses)} 個")
+
+    with _cache_lock:
+        for (lat, lon), resp in zip(to_fetch, responses):
+            cache_key = (lat, lon, start_date_str)
+            _cache[cache_key] = {"data": resp, "ts": time.time()}
+
+    print(f"[weather batch] 成功批次預抓 {len(responses)} 個地點天氣資料")
+
+
 def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
     """
     查詢指定座標、日期的逐小時天氣預報

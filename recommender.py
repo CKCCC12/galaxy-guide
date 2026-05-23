@@ -19,7 +19,7 @@
 from datetime import date, timedelta, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from locations import get_locations_for_weekend
-from weather import get_cloud_forecast
+from weather import get_cloud_forecast, prefetch_weather_batch
 from astronomy import get_best_shooting_window
 from airquality import get_current_aqi, get_aqi_level, format_aqi_report
 from cwa import get_pop_forecast, format_pop_report, get_cloud_from_cwa
@@ -50,6 +50,11 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
 
     candidates = get_locations_for_weekend(month=month, max_bortle=max_bortle)
     print(f"📍 共 {len(candidates)} 個候選地點，開始評估...\n")
+
+    # 一次批次請求拿回所有地點的 Open-Meteo 資料，避免 14 次單獨請求觸發 429
+    # 失敗也沒關係，後續單地點查詢會走原本的 fallback 重試流程
+    coords = [(loc["lat"], loc["lon"]) for loc in candidates]
+    prefetch_weather_batch(coords, target_date)
 
     def _evaluate_location(loc):
         """單一地點的完整查詢與評分（供平行執行）"""
