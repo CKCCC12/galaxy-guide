@@ -4,7 +4,7 @@
 # 把原本的 CLI 推薦系統包裝成網頁介面
 # 使用者可以在手機瀏覽器上查詢銀河拍攝推薦
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for
 from datetime import date, timedelta, datetime
 from recommender import recommend, build_report
 from weather import TW_TZ
@@ -63,6 +63,12 @@ def index():
     )
 
 
+@app.route("/recommend", methods=["GET"])
+def recommend_get():
+    """GET 訪問 /recommend（直接輸入網址、重新整理、書籤）導回首頁，避免 405/500"""
+    return redirect(url_for("index"))
+
+
 @app.route("/recommend", methods=["POST"])
 def get_recommendation():
     """接收表單、執行推薦、回傳結果"""
@@ -70,20 +76,20 @@ def get_recommendation():
     date_str = request.form.get("date", "")
     region = request.form.get("region", "").strip()
     bortle = 4
-    top_n = int(request.form.get("top_n", 3))
 
     max_date = datetime.now(TW_TZ).date() + timedelta(days=7)
 
-    # 驗證日期格式
+    # 驗證 top_n 與日期格式
     try:
+        top_n = int(request.form.get("top_n", 3))
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
+    except (ValueError, TypeError):
         return render_template(
             "index.html",
             default_date=date_str,
             max_date=max_date.strftime("%Y-%m-%d"),
             result=None,
-            error=f"日期格式錯誤：{date_str}，請使用 YYYY-MM-DD 格式",
+            error=f"參數格式錯誤：日期 {date_str}，請使用 YYYY-MM-DD 格式",
         )
 
     # 執行推薦
