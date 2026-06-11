@@ -6,7 +6,7 @@
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from datetime import date, timedelta, datetime
-from recommender import recommend, build_report
+from recommender import recommend
 from weather import TW_TZ
 
 app = Flask(__name__)
@@ -87,7 +87,8 @@ def get_recommendation():
     region = request.form.get("region", "").strip()
     bortle = 4
 
-    max_date = datetime.now(TW_TZ).date() + timedelta(days=7)
+    today = datetime.now(TW_TZ).date()
+    max_date = today + timedelta(days=7)
 
     # 驗證 top_n 與日期格式
     try:
@@ -102,23 +103,24 @@ def get_recommendation():
             error=f"參數格式錯誤：日期 {date_str}，請使用 YYYY-MM-DD 格式",
         )
 
-    # 執行推薦
-    try:
-        result = recommend(target_date=target_date, max_bortle=bortle, top_n=top_n)
+    # 驗證日期範圍：前端 input 的 max 屬性可被繞過（直接 POST），
+    # 超出 Open-Meteo 預報範圍會導致所有地點查詢失敗、顯示一堆無意義的 0 分
+    if not (today <= target_date <= max_date):
+        return render_template(
+            "index.html",
+            default_date=today.strftime("%Y-%m-%d"),
+            max_date=max_date.strftime("%Y-%m-%d"),
+            result=None,
+            error=f"日期需在 {today} 至 {max_date} 之間（天氣預報僅支援未來 7 天）",
+        )
 
-        # 如果有指定區域，過濾結果
-        if region and region != "全部":
-            filtered = [
-                item for item in result["candidates"]
-                if region in item["location"]["region"]
-            ]
-            if filtered:
-                result["candidates"] = filtered
-                result["top"] = filtered[:top_n]
-                result["report"] = build_report(
-                    target_date, result["top"], result["candidates"]
-                )
-            # 若找不到指定區域，顯示全部結果
+    # 執行推薦
+    # 區域過濾在 recommend() 內、評分之前完成：選定區域時只評估該區地點，
+    # 大幅減少外部 API 呼叫與等待時間（找不到該區域地點時自動退回全部）
+    try:
+        result = recommend(
+            target_date=target_date, max_bortle=bortle, top_n=top_n, region=region
+        )
 
         # 查詢今天才標記當前時段，查詢未來日期無意義
         now_tw = datetime.now(TW_TZ)

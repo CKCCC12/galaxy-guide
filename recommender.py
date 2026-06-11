@@ -28,7 +28,7 @@ import pytz
 TW_TZ = pytz.timezone("Asia/Taipei")
 
 
-def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
+def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: str = None) -> dict:
     """
     主函式：計算指定日期的最佳銀河拍攝地點
 
@@ -36,6 +36,7 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
         target_date: 目標日期（通常是週六或週日）
         max_bortle:  接受的最高光害等級（預設 4）
         top_n:       回傳前幾名（預設 Top 3）
+        region:      區域名稱（如「台東」），None 或「全部」表示不限區域
 
     Returns:
         {
@@ -49,6 +50,16 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3) -> dict:
     is_future = target_date > date.today()
 
     candidates = get_locations_for_weekend(month=month, max_bortle=max_bortle)
+
+    # 區域過濾在「評分之前」：評估是整個流程最耗時的部分（每個地點都要查
+    # 天氣/空品/降雨 API），先過濾就不會浪費時間評估使用者不要的地點。
+    # 用子字串匹配讓「台東」同時涵蓋「台東（離島）」。
+    # 該區域無符合地點時退回全部地點（與舊版行為一致：找不到就顯示全部）。
+    if region and region != "全部":
+        filtered = [loc for loc in candidates if region in loc["region"]]
+        if filtered:
+            candidates = filtered
+
     print(f"📍 共 {len(candidates)} 個候選地點，開始評估...\n")
 
     # 一次批次請求拿回所有地點的 Open-Meteo 資料，避免 14 次單獨請求觸發 429
