@@ -58,10 +58,12 @@ _rate_state: dict = {"last_ts": 0.0}
 _rate_lock = threading.Lock()
 _MIN_INTERVAL = 0.5  # 秒
 
-# 批次預抓失敗的日期集合：當 prefetch_weather_batch 失敗（多半因 IP 級 429），
-# 把該日期 key 加進來，後續對同日期任何單地點查詢就立即 raise 不重試，
+# 批次預抓失敗的日期記錄：當 prefetch_weather_batch 失敗（多半因 IP 級 429），
+# 記錄 {日期字串: 失敗時間}，TTL 內對同日期任何單地點查詢立即 raise 不重試，
 # 避免 14 個地點各自重試把 gunicorn 120s timeout 用完造成 worker 被 SIGKILL。
-_BATCH_FAILED_DATES: set = set()
+# TTL 過後自動解除標記，API 恢復後查詢就能成功（不必等 worker 重啟）。
+_BATCH_FAILED: dict = {}
+_BATCH_FAIL_TTL = 300  # 標記有效 5 分鐘
 
 # Open-Meteo API 端點
 API_URL = "https://api.open-meteo.com/v1/forecast"
@@ -130,9 +132,9 @@ def prefetch_weather_batch(coords: list, target_date: date) -> None:
         print(f"[weather batch] 失敗 {type(e).__name__}: {e}（用時 {time.time()-t0:.1f}s）", flush=True)
 
     if data is None:
-        # 標記此日期：後續 _fetch_api 對同日期的單地點查詢會立即 raise，避免重試把 timeout 用完
-        _BATCH_FAILED_DATES.add(start_date_str)
-        print(f"[weather batch] 批次失敗，已標記日期 {start_date_str}，後續單地點查詢將直接走預設值", flush=True)
+        # 標記此日期：TTL 內 _fetch_api 對同日期的單地點查詢會立即 raise，避免重試把 timeout 用完
+        _BATCH_FAILED[start_date_str] = time.time()
+        print(f"[weather batch] 批次失敗，已標記日期 {start_date_str}（{_BATCH_FAIL_TTL}s 內單地點查詢直接走預設值）", flush=True)
         return
 
     # 多座標 → list[dict]；單座標（保險處理）→ dict
@@ -141,12 +143,59 @@ def prefetch_weather_batch(coords: list, target_date: date) -> None:
     if len(responses) != len(to_fetch):
         print(f"[weather batch] 警告：請求 {len(to_fetch)} 個但回應 {len(responses)} 個", flush=True)
 
+    # 用回應中的座標配對回請求座標，不依賴回應順序。
+    # 若 Open-Meteo 略過某個座標，依順序 zip 會讓後面所有地點的資料整批錯位
+    #（張冠李戴比查詢失敗更難察覺），座標配對則只會少掉那一個地點，
+    # 缺的地點不寫快取，後續自動走單地點查詢補抓。
+    matched = _match_responses_to_coords(responses, to_fetch)
+
     with _cache_lock:
-        for (lat, lon), resp in zip(to_fetch, responses):
+        for (lat, lon), resp in matched.items():
             cache_key = (lat, lon, start_date_str)
             _cache[cache_key] = {"data": resp, "ts": time.time()}
 
-    print(f"[weather batch] 成功批次預抓 {len(responses)} 個地點（用時 {time.time()-t0:.2f}s）", flush=True)
+    missing = len(to_fetch) - len(matched)
+    if missing:
+        print(f"[weather batch] {missing} 個地點未配對到回應，將走單地點查詢補抓", flush=True)
+    print(f"[weather batch] 成功批次預抓 {len(matched)} 個地點（用時 {time.time()-t0:.2f}s）", flush=True)
+
+
+def _match_responses_to_coords(responses: list, coords: list) -> dict:
+    """
+    把批次回應依座標配對回請求的座標
+
+    Open-Meteo 會把請求座標吸附到天氣模型的網格點（最粗約 0.25°），
+    回應中的 latitude/longitude 與請求值有偏差，因此對每個回應
+    找「距離最近」的請求座標，並設容差上限 0.5°（約 55 km），
+    超過視為配對失敗（該回應丟棄）。
+
+    Returns:
+        {(lat, lon): 該座標的回應 dict}
+    """
+    matched = {}
+    tol_sq = 0.5 ** 2
+    for resp in responses:
+        try:
+            rlat = float(resp["latitude"])
+            rlon = float(resp["longitude"])
+        except (KeyError, TypeError, ValueError):
+            print(f"[weather batch] 回應缺少座標欄位，丟棄該筆", flush=True)
+            continue
+
+        best_coord = None
+        best_d_sq = float("inf")
+        for coord in coords:
+            d_sq = (coord[0] - rlat) ** 2 + (coord[1] - rlon) ** 2
+            if d_sq < best_d_sq:
+                best_d_sq = d_sq
+                best_coord = coord
+
+        if best_coord is not None and best_d_sq <= tol_sq:
+            matched[best_coord] = resp
+        else:
+            print(f"[weather batch] 回應座標 ({rlat}, {rlon}) 與所有請求座標距離過遠，丟棄", flush=True)
+
+    return matched
 
 
 def get_cloud_forecast(lat: float, lon: float, target_date: date) -> dict:
@@ -211,11 +260,15 @@ def _fetch_api(params: dict) -> dict:
             return entry["data"]
 
     # 若此日期已被 prefetch_weather_batch 標記為失敗（多半是 Open-Meteo IP 級限流），
-    # 不要再花時間單地點重試 — 14 個地點各重試一輪就會把 120s timeout 用完。
+    # TTL 內不要再花時間單地點重試 — 14 個地點各重試一輪就會把 120s timeout 用完。
     # 直接 raise 讓 recommender 的 _evaluate_location 走預設值 fallback。
+    # 標記超過 TTL 就解除，讓 API 恢復後的查詢有機會成功。
     start_date = params.get("start_date")
-    if start_date in _BATCH_FAILED_DATES:
-        raise ConnectionError(f"批次預抓已標記 {start_date} 失敗，跳過單地點查詢")
+    failed_ts = _BATCH_FAILED.get(start_date)
+    if failed_ts is not None:
+        if time.time() - failed_ts < _BATCH_FAIL_TTL:
+            raise ConnectionError(f"批次預抓已標記 {start_date} 失敗，跳過單地點查詢")
+        _BATCH_FAILED.pop(start_date, None)  # 標記過期，解除（pop 避免多執行緒重複刪除報錯）
 
     query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{API_URL}?{query_string}"
