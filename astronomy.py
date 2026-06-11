@@ -15,6 +15,7 @@
 
 from skyfield.api import Star, Loader, wgs84
 from skyfield import almanac
+from functools import lru_cache
 import os
 
 # 從專案目錄讀取本地星曆表檔案（de421.bsp 需放在同一資料夾）
@@ -42,6 +43,10 @@ def _load_ephemeris():
 
 # ── 月相計算 ─────────────────────────────────────────────────
 
+# lru_cache：月相只依賴「日期」，與地點無關，但每次推薦會對 14 個地點各算一次。
+# 快取後同一天只算 1 次。同地點同日期的結果是固定值，快取不會過時。
+# 注意：回傳的 dict 被所有呼叫端共用，呼叫端只能讀取、不可修改。
+@lru_cache(maxsize=32)
 def get_moon_illumination(target_date: date) -> dict:
     """
     計算指定日期（台灣時間午夜）的月亮照明比例與月相名稱
@@ -115,6 +120,10 @@ def _get_phase_name(illumination: float, phase_angle: float) -> str:
 
 # ── 月升月落計算 ─────────────────────────────────────────────
 
+# lru_cache：find_discrete（搜尋月升月落）是 skyfield 中較昂貴的運算，
+# 而同地點同日期的結果固定不變。使用者重新整理或多人查同一天時直接命中快取。
+# 容量 256 > 14 地點 × 8 天 = 112 種組合，足夠涵蓋全部查詢範圍。
+@lru_cache(maxsize=256)
 def get_moon_schedule(lat: float, lon: float, target_date: date) -> dict:
     """
     計算指定地點、日期的月升與月落時間（台灣時間）
@@ -138,8 +147,10 @@ def get_moon_schedule(lat: float, lon: float, target_date: date) -> dict:
 
     # 搜尋範圍：當天 12:00 到隔天 14:00（26 小時）
     # 擴大窗口以捕捉月落發生在 06:00 以後的情況（例如月亮深夜升起、隔天上午才落）
+    # 用 timedelta 計算隔天，避免月末 day+1 超出當月天數（如 6/30+1=31 會 crash）
+    next_day = target_date + timedelta(days=1)
     t0 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 12, 0)))
-    t1 = ts.from_datetime(TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 14, 0)))
+    t1 = ts.from_datetime(TW_TZ.localize(datetime(next_day.year, next_day.month, next_day.day, 14, 0)))
 
     # 找月升月落事件（0 = 落下, 1 = 升起）
     f = almanac.risings_and_settings(eph, eph["moon"], observer)
@@ -170,8 +181,10 @@ def _calculate_dark_hours(moonrise, moonset, target_date: date) -> list:
     計算月亮在地平線以下的時段（暗夜窗口）
     觀測時段定義為當天 20:00 到隔天 05:00
     """
+    # 用 timedelta 計算隔天，避免月末 day+1 超出當月天數
+    next_day = target_date + timedelta(days=1)
     obs_start = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day, 20, 0))
-    obs_end = TW_TZ.localize(datetime(target_date.year, target_date.month, target_date.day + 1, 5, 0))
+    obs_end = TW_TZ.localize(datetime(next_day.year, next_day.month, next_day.day, 5, 0))
 
     # 情境 1：整晚月亮都在地平線下（今晚無月升或月升在 05:00 後）
     if moonrise is None and moonset is None:
@@ -207,6 +220,8 @@ def _calculate_dark_hours(moonrise, moonset, target_date: date) -> list:
 
 # ── 銀河核心可見窗口 ─────────────────────────────────────────
 
+# lru_cache：每次呼叫做 37 個取樣點的 skyfield 觀測計算，結果同樣固定不變
+@lru_cache(maxsize=256)
 def get_milkyway_window(lat: float, lon: float, target_date: date) -> dict:
     """
     計算銀河核心（銀河系中心方向）在指定地點的可見時段
