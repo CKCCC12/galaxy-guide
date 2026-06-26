@@ -160,6 +160,53 @@
       letter-spacing: 0.04em; margin-bottom: 14px;
     }
 
+    /* ── AI 智慧解讀卡片 ── */
+    .ai-card {
+      background: rgba(14, 22, 60, 0.82);
+      border: 1px solid rgba(120, 150, 255, 0.42);
+      border-radius: 18px; padding: 20px; margin-bottom: 16px;
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 4px 28px rgba(40, 70, 200, 0.22);
+    }
+    .ai-card-head { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+    .ai-spark { font-size: 1.1rem; }
+    .ai-title {
+      font-size: 0.95rem; font-weight: 600;
+      background: linear-gradient(135deg, #a8c8ff, #e0ecff, #7ab0ff);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .ai-badge {
+      margin-left: auto; font-size: 0.68rem; color: #5a7aaa;
+      border: 1px solid rgba(80, 120, 220, 0.3);
+      padding: 2px 8px; border-radius: 20px;
+    }
+    .ai-summary {
+      color: #cfe2ff; font-size: 0.92rem; line-height: 1.85;
+      margin: 10px 0 0;
+    }
+    .ai-tips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .ai-tip {
+      font-size: 0.78rem; color: #bcd6ff;
+      background: rgba(40, 70, 160, 0.3);
+      border: 1px solid rgba(90, 130, 220, 0.3);
+      padding: 5px 11px; border-radius: 10px;
+    }
+    .ai-note {
+      margin-top: 13px; padding-top: 11px;
+      border-top: 1px solid rgba(80, 120, 220, 0.18);
+      font-size: 0.68rem; color: #4a6090; line-height: 1.6;
+    }
+    .ai-loading-text { color: #6a8ac0; font-size: 0.86rem; margin: 8px 0 0; }
+    .ai-loading-text::after {
+      content: ''; display: inline-block; width: 1em; text-align: left;
+      animation: aiDots 1.4s steps(4, end) infinite;
+    }
+    @keyframes aiDots {
+      0% { content: ''; } 25% { content: '·'; }
+      50% { content: '··'; } 75% { content: '···'; }
+    }
+
     /* ── 地點卡片 ── */
     .location-card {
       background: rgba(6, 16, 52, 0.78);
@@ -445,6 +492,30 @@
       📊 {{ result.date }} 推薦結果 ·
       共評估 {{ result.candidates | length }} 個候選地點
     </div>
+
+    <!-- AI 智慧解讀：載入中佔位 + 完成後填入的卡片，皆由下方 JS 控制顯示 -->
+    {% if ai_payload and ai_payload.locations %}
+    <div class="ai-card" id="aiLoading">
+      <div class="ai-card-head">
+        <span class="ai-spark">✨</span>
+        <span class="ai-title">AI 智慧解讀</span>
+      </div>
+      <p class="ai-loading-text">AI 解讀生成中</p>
+    </div>
+
+    <div class="ai-card" id="aiCard" style="display:none;">
+      <div class="ai-card-head">
+        <span class="ai-spark">✨</span>
+        <span class="ai-title">AI 智慧解讀</span>
+        <span class="ai-badge">由 Gemini 生成</span>
+      </div>
+      <p class="ai-summary" id="aiSummary"></p>
+      <div class="ai-tips" id="aiTips"></div>
+      <div class="ai-note">ⓘ AI 解讀僅供參考，分數仍由天文與氣象公式計算。</div>
+    </div>
+
+    <script id="aiPayload" type="application/json">{{ ai_payload | tojson }}</script>
+    {% endif %}
 
     {% set medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"] %}
 
@@ -846,11 +917,49 @@
       step();
     }
 
+    /* ── AI 智慧解讀：非同步向 /ai-summary 取得解讀後填入卡片 ──
+       任何失敗（無金鑰、逾時、格式錯）都靜默隱藏，不影響下方推薦結果。 */
+    function loadAiSummary() {
+      const payloadEl = document.getElementById('aiPayload');
+      if (!payloadEl) return;
+      const loading = document.getElementById('aiLoading');
+      const card    = document.getElementById('aiCard');
+
+      let payload;
+      try { payload = JSON.parse(payloadEl.textContent); }
+      catch (e) { if (loading) loading.style.display = 'none'; return; }
+
+      fetch('/ai-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (loading) loading.style.display = 'none';
+        // 降級：沒成功就什麼都不顯示（卡片本來就是 display:none）
+        if (!data || data.error || !data.summary) return;
+
+        document.getElementById('aiSummary').textContent = data.summary;
+        const tipsEl = document.getElementById('aiTips');
+        (data.tips || []).forEach(function (t) {
+          const span = document.createElement('span');
+          span.className = 'ai-tip';
+          span.textContent = t;   // textContent 防 XSS，AI 文字一律當純文字
+          tipsEl.appendChild(span);
+        });
+        card.style.display = 'block';
+      })
+      .catch(function () { if (loading) loading.style.display = 'none'; });
+    }
+
     /* ── 日期最小值設為今天 ── */
     document.addEventListener('DOMContentLoaded', function () {
       const today = new Date().toISOString().split('T')[0];
       const d = document.querySelector('input[type="date"]');
       if (d && !d.value) d.value = today;
+
+      loadAiSummary();
 
       /* ── 初始化所有趨勢圖 ── */
       window._charts = {};
