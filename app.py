@@ -14,6 +14,7 @@ import queue
 import threading
 from recommender import recommend
 from weather import TW_TZ
+from ai_summary import build_payload, get_ai_summary
 
 app = Flask(__name__)
 
@@ -61,6 +62,23 @@ def api_status():
         results["open_meteo_no_ssl_ctx"] = {"status": "error", "error": str(e)}
 
     return jsonify(results)
+
+
+@app.route("/ai-summary", methods=["POST"])
+def ai_summary_endpoint():
+    """接收前端傳來的精簡 payload，回傳 Gemini 生成的 AI 解讀（JSON）。
+
+    為什麼獨立成一個非同步端點，而不是在 /recommend 內同步生成？
+      1. 結果頁可以先「秒開」，AI 卡片稍後再補上，使用者不必乾等。
+      2. Gemini 免費版偶爾較慢或限流，不該拖累主要的地點推薦結果。
+
+    任何失敗（無金鑰、逾時、格式錯）都由 get_ai_summary() 內部處理，
+    回傳含 error 欄位的 JSON，前端會據此靜默隱藏卡片。
+    """
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "bad_payload"}), 400
+    return jsonify(get_ai_summary(payload))
 
 
 @app.route("/", methods=["GET"])
@@ -132,6 +150,10 @@ def get_recommendation():
         now_tw = datetime.now(TW_TZ)
         current_hour = now_tw.hour if target_date == now_tw.date() else None
 
+        # 萃取 AI 解讀需要的精簡 payload，嵌進頁面供前端非同步呼叫 /ai-summary。
+        # 這裡只是「組資料」，不呼叫 Gemini，所以不會拖慢結果頁載入。
+        ai_payload = build_payload(target_date, result["top"])
+
         return render_template(
             "index.html",
             default_date=date_str,
@@ -141,6 +163,7 @@ def get_recommendation():
             selected_region=region,
             selected_top_n=top_n,
             current_hour=current_hour,
+            ai_payload=ai_payload,
         )
 
     except Exception as e:
@@ -223,11 +246,13 @@ def recommend_stream():
             if kind is None:
                 break
             if kind == "result":
-                # render_template 需在請求情境內執行，stream_with_context 已保證
+                # render_template 需在請求情境內執行，stream_with_context 已保證。
+                # 同 POST 路徑：組 ai_payload 嵌進結果片段，讓串流結果頁也有 AI 卡片。
+                ai_payload = build_payload(target_date, payload["top"])
                 html = render_template(
                     "_result.html", result=payload,
                     selected_region=region, selected_top_n=top_n,
-                    current_hour=current_hour,
+                    current_hour=current_hour, ai_payload=ai_payload,
                 )
                 yield sse("result", {"html": html})
             else:

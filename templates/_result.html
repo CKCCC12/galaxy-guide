@@ -3,6 +3,30 @@
       共評估 {{ result.candidates | length }} 個候選地點
     </div>
 
+    <!-- AI 智慧解讀：載入中佔位 + 完成後填入的卡片，皆由 index.html 的 loadAiSummary() 控制顯示 -->
+    {% if ai_payload and ai_payload.locations %}
+    <div class="ai-card" id="aiLoading">
+      <div class="ai-card-head">
+        <span class="ai-spark">✨</span>
+        <span class="ai-title">AI 智慧解讀</span>
+      </div>
+      <p class="ai-loading-text">AI 解讀生成中</p>
+    </div>
+
+    <div class="ai-card" id="aiCard" style="display:none;">
+      <div class="ai-card-head">
+        <span class="ai-spark">✨</span>
+        <span class="ai-title">AI 智慧解讀</span>
+        <span class="ai-badge">由 Gemini 生成</span>
+      </div>
+      <p class="ai-summary" id="aiSummary"></p>
+      <div class="ai-tips" id="aiTips"></div>
+      <div class="ai-note">ⓘ AI 解讀僅供參考，分數仍由天文與氣象公式計算。</div>
+    </div>
+
+    <script id="aiPayload" type="application/json">{{ ai_payload | tojson }}</script>
+    {% endif %}
+
     {% set medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"] %}
 
     {% for item in result.top %}
