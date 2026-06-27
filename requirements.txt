@@ -3,3 +3,4 @@ skyfield
 pytz
 gunicorn
 python-dotenv
+certifi
