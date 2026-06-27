@@ -388,7 +388,7 @@
 
     <!-- 查詢表單 -->
     <div class="card">
-      <form method="POST" action="/recommend" onsubmit="showLoading()">
+      <form id="queryForm" method="POST" action="/recommend">
 
         <div class="form-group">
           <label>📅 查詢日期</label>
@@ -434,247 +434,15 @@
       </div>
     </div>
 
-    <!-- 錯誤訊息 -->
-    {% if error %}
-    <div class="error-box">❌ {{ error }}</div>
-    {% endif %}
-
-    <!-- 推薦結果 -->
-    {% if result %}
-    <div class="result-header">
-      📊 {{ result.date }} 推薦結果 ·
-      共評估 {{ result.candidates | length }} 個候選地點
+    <!-- 查詢結果：POST 由伺服器渲染填入；串流模式由 JS 注入到同一容器 -->
+    <div id="resultArea">
+      {% if error %}
+      <div class="error-box">❌ {{ error }}</div>
+      {% endif %}
+      {% if result %}
+      {% include "_result.html" %}
+      {% endif %}
     </div>
-
-    {% set medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"] %}
-
-    {% for item in result.top %}
-    {% set loc    = item.location %}
-    {% set bd     = item.breakdown %}
-    {% set moon   = item.astro.moon %}
-    {% set mw     = item.astro.milkyway %}
-    {% set sum    = item.weather.night_summary %}
-    {% set gold   = item.astro.golden_windows %}
-    {% set aqi    = item.aqi %}
-    {% set nights = item.weather.night_hours %}
-    {% set rank   = loop.index %}
-
-    <div class="location-card rank-{{ rank if rank <= 3 else 0 }}">
-      <div class="loc-title">{{ medals[rank-1] if rank <= medals|length else rank ~ "." }} {{ loc.name }}</div>
-      <div class="loc-meta">
-        {{ loc.region }} &nbsp;·&nbsp; Bortle {{ loc.bortle }} &nbsp;·&nbsp; 海拔 {{ loc.altitude_m }} m
-      </div>
-
-      <div class="score-row">
-        <div class="score-badge">
-          <span class="score-badge-title">銀河可見指數</span>
-          <div class="score-main">
-            <span class="score-num">{{ item.score | int }}</span>
-            <span class="score-unit">分</span>
-          </div>
-        </div>
-        {% if item.score >= 80 %}
-        <span class="score-level level-good">✓ 良好</span>
-        {% elif item.score >= 60 %}
-        <span class="score-level level-ok">— 普通</span>
-        {% else %}
-        <span class="score-level level-bad">✗ 不建議出發</span>
-        {% endif %}
-      </div>
-
-      <!-- ① 雲量 -->
-      <div class="metric">
-        <span class="metric-label">雲量</span>
-        {% if bd.cloud_source == 'cwa' %}
-        <span class="metric-value">{{ bd.avg_cloud }}%
-          <span style="color:#b0ccf0;font-size:0.72rem;">（氣象署）</span>
-        </span>
-        {% else %}
-        <span class="metric-value">平均 {{ sum.avg_cloud }}%
-          <span style="color:#b0ccf0;font-size:0.72rem;">（Open-Meteo）</span>
-        </span>
-        {% endif %}
-        <div class="bar-bg"><div class="bar-fill bar-cloud" style="width:{{ bd.cloud_score }}%"></div></div>
-        <span class="bar-score">{{ bd.cloud_score | int }}/100</span>
-      </div>
-
-
-      <!-- ③ 能見度 -->
-      <div class="metric">
-        <span class="metric-label">能見度</span>
-        <span class="metric-value">
-          平均 {{ sum.avg_visibility_km }} km
-          <span style="color:#b0ccf0;font-size:0.72rem;">（Open-Meteo）</span>
-        </span>
-        <div class="bar-bg"><div class="bar-fill bar-vis" style="width:{{ bd.visibility_score }}%"></div></div>
-        <span class="bar-score">{{ bd.visibility_score | int }}/100</span>
-      </div>
-
-      <!-- ④ 空氣品質 -->
-      <div class="metric">
-        <span class="metric-label">空氣品質</span>
-        <span class="metric-value">
-          {% if aqi and aqi.status is defined %}
-            {{ aqi.status }}
-            <span style="color:#b0ccf0;font-size:0.72rem;">（環境部）</span>
-          {% else %}
-            AOD {{ sum.avg_aod }}
-            <span style="color:#b0ccf0;font-size:0.72rem;">（Open-Meteo）</span>
-          {% endif %}
-        </span>
-        <div class="bar-bg"><div class="bar-fill bar-aqi" style="width:{{ bd.air_quality_score }}%"></div></div>
-        <span class="bar-score">{{ bd.air_quality_score | int }}/100</span>
-      </div>
-
-
-      <!-- ⑤ 降雨機率 -->
-      {% set pop = item['pop'] %}
-      {% if pop and pop.max_pop is defined and pop.error is not defined %}
-      <div class="metric">
-        <span class="metric-label">降雨機率</span>
-        <span class="metric-value">夜間最高 {{ pop.max_pop }}%
-          <span style="color:#b0ccf0;font-size:0.72rem;">（氣象署）</span>
-        </span>
-        <div class="bar-bg"><div class="bar-fill bar-rain" style="width:{{ pop.max_pop }}%"></div></div>
-        <span class="bar-score">{{ pop.max_pop }}%</span>
-      </div>
-      <!-- 警告標籤：降雨風險 + 沙塵 + 濕度 -->
-      {% if pop.max_pop >= 50 or pop.max_pop >= 30 or sum.max_dust >= 20 or sum.max_humidity >= 85 %}
-      <div class="warn-tags">
-        {% if pop.max_pop >= 50 %}
-        <span class="warn-tag" style="border-color:rgba(80,80,200,0.45);color:#9090dd;background:rgba(15,15,70,0.85);">⛔ 降雨風險高，評分已壓制</span>
-        {% elif pop.max_pop >= 30 %}
-        <span class="warn-tag" style="border-color:rgba(100,100,180,0.4);color:#8080bb;background:rgba(15,15,60,0.8);">⚠ 降雨機率偏高，評分已扣減</span>
-        {% endif %}
-        {% if sum.max_dust >= 20 %}
-        <span class="warn-tag">⚠️ 沙塵 {{ sum.max_dust }} μg/m³</span>
-        {% endif %}
-        {% if sum.max_humidity >= 85 %}
-        <span class="warn-tag">💧 濕度最高 {{ sum.max_humidity }}%</span>
-        {% endif %}
-      </div>
-      {% endif %}
-      {% elif pop and pop.error == 'no_key' %}
-      <div class="aqi-detail" style="color:#2a3a60;">⚙️ 降雨機率：未設定 CWA_API_KEY</div>
-      <!-- 無降雨資料時仍顯示沙塵/濕度警告 -->
-      {% if sum.max_dust >= 20 or sum.max_humidity >= 85 %}
-      <div class="warn-tags">
-        {% if sum.max_dust >= 20 %}
-        <span class="warn-tag">⚠️ 沙塵 {{ sum.max_dust }} μg/m³</span>
-        {% endif %}
-        {% if sum.max_humidity >= 85 %}
-        <span class="warn-tag">💧 濕度最高 {{ sum.max_humidity }}%</span>
-        {% endif %}
-      </div>
-      {% endif %}
-      {% endif %}
-
-
-      <hr class="divider" />
-
-      <!-- 月相資訊（固定位置，不隨黃金時段有無而改變） -->
-      {% set sched = item.astro.schedule %}
-      <div class="moon-block">
-        🌙 月光照明 {{ moon.illumination_pct }}%（{{ moon.phase_name }}）
-        &nbsp;·&nbsp;
-        月升 {{ sched.moonrise.strftime('%H:%M') if sched.moonrise else '—' }}
-        　月落 {{ sched.moonset.strftime('%H:%M') if sched.moonset else '—' }}
-      </div>
-
-      <!-- 黃金窗口 -->
-      {% if gold %}
-      <div class="golden-windows">
-        {% for start, end in gold %}
-        {% set mins = ((end - start).total_seconds() / 60) | int %}
-        <span class="golden-tag">
-          銀河最佳拍攝時間 {{ start.strftime('%H:%M') }} — {{ end.strftime('%H:%M') }}（{{ mins }} 分鐘）
-        </span>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="no-golden">⚠️ 無黃金時段（月光與銀河可見窗口未重疊）</div>
-      {% endif %}
-
-      <!-- 逐小時展開按鈕 -->
-      <button class="hourly-toggle" onclick="toggleHourly(this)">
-        <span class="toggle-arrow">▶</span>
-        <span>逐小時天氣詳情（夜間 20:00 ~ 05:00）</span>
-      </button>
-
-      <!-- 逐小時表格 -->
-      <div class="hourly-table">
-        {% if nights %}
-        <div class="hourly-chart">
-          <canvas id="chart-{{ rank }}" height="160"
-            data-labels='[{% for h in nights %}"{{ h.time.strftime("%H:%M") }}"{% if not loop.last %},{% endif %}{% endfor %}]'
-            data-scores='[{% for h in nights %}{{ h.hour_score }}{% if not loop.last %},{% endif %}{% endfor %}]'>
-          </canvas>
-        </div>
-        {% endif %}
-        <table>
-          <thead>
-            <tr>
-              <th>時間</th>
-              <th>雲量<span class="th-source">（Open-Meteo）</span></th>
-              <th>能見度<span class="th-source">（Open-Meteo）</span></th>
-              <th>空氣品質<span class="th-source">（Open-Meteo）</span></th>
-              <th>降雨機率<span class="th-source">（氣象署）</span></th>
-              <th>銀河可見分數<span class="th-source">（綜合）</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for h in nights %}
-            <tr class="{{ 'suitable' if h.suitable else '' }} {{ 'current-hour' if current_hour is not none and h.time.hour == current_hour else '' }}">
-              <td>{{ h.time.strftime('%H:%M') }}</td>
-              <td>{{ h.cloud_cover }}%</td>
-              <td>{{ h.visibility_km }} km</td>
-              <td>
-                {% if h.aod < 0.1 %}優
-                {% elif h.aod < 0.2 %}良
-                {% elif h.aod < 0.3 %}普通
-                {% else %}不良{% endif %}
-              </td>
-              <td>{% if h['pop'] is not none %}{{ h['pop'] }}%{% else %}—{% endif %}</td>
-              <td style="
-                font-weight: 600;
-                color: {% if h.hour_score >= 80 %}#60d080
-                       {% elif h.hour_score >= 60 %}#c8b050
-                       {% else %}#a04040{% endif %};
-              ">{{ h.hour_score }}（{% if h.hour_score >= 80 %}良好{% elif h.hour_score >= 60 %}普通{% else %}不建議{% endif %}）</td>
-            </tr>
-            {% else %}
-            <tr>
-              <td colspan="6" style="text-align:center; color:#2a3a60; padding:16px 10px; font-size:0.78rem;">
-                天氣 API 暫時無法取得逐小時資料
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-    </div><!-- /location-card -->
-    {% endfor %}
-
-    <!-- 其他地點簡表 -->
-    {% if result.candidates | length > result.top | length %}
-    <div class="others-section">
-      <div class="others-title">其他地點評分</div>
-      {% for item in result.candidates[result.top | length :] %}
-      <div class="other-row">
-        <span class="other-name">{{ item.location.name }}</span>
-        <div class="other-stats">
-          <span class="other-stat">☁️ {{ item.weather.night_summary.avg_cloud }}%</span>
-          <span class="other-stat">👁️ {{ item.weather.night_summary.avg_visibility_km }}km</span>
-          <span class="other-stat">AOD {{ item.weather.night_summary.avg_aod }}</span>
-          <span class="other-score">{{ item.score | int }} 分</span>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    {% endif %}
 
     <div class="footer">
       資料來源：Open-Meteo 天氣預報 ／ JPL DE421 星曆表 ／ 環境部空氣品質監測網<br/>
@@ -846,65 +614,155 @@
       step();
     }
 
-    /* ── 日期最小值設為今天 ── */
-    document.addEventListener('DOMContentLoaded', function () {
-      const today = new Date().toISOString().split('T')[0];
-      const d = document.querySelector('input[type="date"]');
-      if (d && !d.value) d.value = today;
-
-      /* ── 初始化所有趨勢圖 ── */
-      window._charts = {};
-      document.querySelectorAll('canvas[id^="chart-"]').forEach(function(canvas) {
-        const labels = JSON.parse(canvas.dataset.labels);
-        const scores = JSON.parse(canvas.dataset.scores);
-        window._charts[canvas.id] = new Chart(canvas, {
-          type: 'line',
-          plugins: [window._gwBgZone],
-          data: {
-            labels: labels,
-            datasets: [{
-              data: scores,
-              borderColor: '#5090d0',
-              backgroundColor: 'rgba(80,144,208,0.12)',
-              fill: true,
-              tension: 0.4,
-              pointRadius: 4,
-              pointHoverRadius: 7,
-              pointBackgroundColor: scores.map(function(s) {
-                return s >= 80 ? '#60d080' : s >= 60 ? '#c8b050' : '#a04040';
-              }),
-              pointBorderColor: 'transparent'
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  title: function(items) { return items[0].label; },
-                  label: function(item) {
-                    var s = item.raw;
-                    var g = s >= 80 ? '良好' : s >= 60 ? '普通' : '不建議';
-                    return '銀河可見分數：' + s + '（' + g + '）';
-                  }
+    /* ── 圖表初始化（抽成函式，串流注入後可重建）── */
+    window._charts = window._charts || {};
+    function buildChart(canvas) {
+      const labels = JSON.parse(canvas.dataset.labels);
+      const scores = JSON.parse(canvas.dataset.scores);
+      window._charts[canvas.id] = new Chart(canvas, {
+        type: 'line',
+        plugins: [window._gwBgZone],
+        data: {
+          labels: labels,
+          datasets: [{
+            data: scores,
+            borderColor: '#5090d0',
+            backgroundColor: 'rgba(80,144,208,0.12)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 7,
+            pointBackgroundColor: scores.map(function(s) {
+              return s >= 80 ? '#60d080' : s >= 60 ? '#c8b050' : '#a04040';
+            }),
+            pointBorderColor: 'transparent'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: function(items) { return items[0].label; },
+                label: function(item) {
+                  var s = item.raw;
+                  var g = s >= 80 ? '良好' : s >= 60 ? '普通' : '不建議';
+                  return '銀河可見分數：' + s + '（' + g + '）';
                 }
               }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: 'rgba(80,120,200,0.15)' },
+              ticks: { color: '#6080a0', font: { size: 11 } }
             },
-            scales: {
-              x: {
-                grid: { color: 'rgba(80,120,200,0.15)' },
-                ticks: { color: '#6080a0', font: { size: 11 } }
-              },
-              y: {
-                min: 0, max: 100,
-                grid: { color: 'rgba(80,120,200,0.15)' },
-                ticks: { color: '#6080a0', font: { size: 11 }, stepSize: 20 }
-              }
+            y: {
+              min: 0, max: 100,
+              grid: { color: 'rgba(80,120,200,0.15)' },
+              ticks: { color: '#6080a0', font: { size: 11 }, stepSize: 20 }
             }
           }
-        });
+        }
+      });
+    }
+    function initCharts(root) {
+      (root || document).querySelectorAll('canvas[id^="chart-"]').forEach(function(canvas) {
+        if (!window._charts[canvas.id]) buildChart(canvas);
+      });
+    }
+    function resetCharts() {
+      Object.keys(window._charts).forEach(function(k) {
+        try { window._charts[k].destroy(); } catch (e) {}
+      });
+      window._charts = {};
+    }
+
+    /* ── 串流查詢：真實進度條（SSE）── */
+    function finishStreaming() {
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = false;
+      btn.innerHTML = '🔍 &nbsp;開始查詢';
+      setTimeout(function () {
+        document.getElementById('loading').style.display = 'none';
+      }, 500);
+    }
+    function startStreaming(params) {
+      const btn = document.getElementById('submitBtn');
+      const loading = document.getElementById('loading');
+      const textEl = document.getElementById('loadingText');
+      const barEl = document.getElementById('loadingBar');
+      const area = document.getElementById('resultArea');
+
+      btn.disabled = true;
+      btn.textContent = '⏳  查詢中…';
+      loading.style.display = 'block';
+      textEl.textContent = '正在連線…';
+      barEl.style.width = '0%';
+      area.innerHTML = '';
+
+      const es = new EventSource('/recommend/stream?' + params);
+      let completed = false;
+
+      es.addEventListener('progress', function (e) {
+        const d = JSON.parse(e.data);
+        const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 100;
+        barEl.style.width = pct + '%';
+        textEl.textContent = d.done === 0
+          ? ('開始評估 ' + d.total + ' 個候選地點…')
+          : ('已完成 ' + d.done + ' / ' + d.total + ' 個地點' + (d.name ? '（' + d.name + '）' : ''));
+      });
+
+      es.addEventListener('result', function (e) {
+        completed = true;
+        es.close();
+        const d = JSON.parse(e.data);
+        barEl.style.width = '100%';
+        textEl.textContent = '完成！';
+        resetCharts();
+        area.innerHTML = d.html;
+        initCharts(area);
+        finishStreaming();
+        area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+
+      es.addEventListener('failed', function (e) {
+        completed = true;
+        es.close();
+        let msg = '查詢失敗，請稍後再試。';
+        try { msg = JSON.parse(e.data).message || msg; } catch (_) {}
+        area.innerHTML = '<div class="error-box">❌ ' + msg + '</div>';
+        finishStreaming();
+      });
+
+      es.onerror = function () {
+        // 連線層級中斷：尚未完成就退回傳統整頁 POST（最穩妥後備）
+        if (!completed) {
+          es.close();
+          document.getElementById('queryForm').submit();
+        }
+      };
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      const today = new Date().toISOString().split('T')[0];
+      const dInput = document.querySelector('input[type="date"]');
+      if (dInput && !dInput.value) dInput.value = today;
+
+      initCharts(document);  // POST／重新整理後的伺服器渲染結果
+
+      const form = document.getElementById('queryForm');
+      form.addEventListener('submit', function (e) {
+        if (typeof EventSource === 'undefined') { showLoading(); return; }  // 不支援 SSE → 傳統 POST
+        e.preventDefault();
+        const fd = new FormData(form);
+        const params = new URLSearchParams();
+        params.set('date', fd.get('date') || '');
+        params.set('region', fd.get('region') || '');
+        params.set('top_n', fd.get('top_n') || '3');
+        startStreaming(params.toString());
       });
     });
   </script>

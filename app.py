@@ -4,8 +4,14 @@
 # 把原本的 CLI 推薦系統包裝成網頁介面
 # 使用者可以在手機瀏覽器上查詢銀河拍攝推薦
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import (
+    Flask, render_template, request, jsonify, redirect, url_for,
+    Response, stream_with_context,
+)
 from datetime import date, timedelta, datetime
+import json
+import queue
+import threading
 from recommender import recommend
 from weather import TW_TZ
 
@@ -145,6 +151,93 @@ def get_recommendation():
             result=None,
             error=f"查詢失敗：{str(e)}",
         )
+
+
+@app.route("/recommend/stream")
+def recommend_stream():
+    """SSE 串流端點：一邊評估各地點、一邊回報真實進度，最後送出渲染好的結果 HTML。
+
+    前端以 EventSource 連線，依序收到：
+      event: progress  data: {"done": n, "total": N, "name": "剛完成的地點"}
+      event: result    data: {"html": "<...>"}    ← 全部完成，內含伺服器渲染的結果片段
+      event: failed    data: {"message": "..."}    ← 參數錯誤或查詢例外
+    全程不換頁，進度條反映真實完成度。不支援 EventSource 的瀏覽器由前端走 POST 後備。
+    """
+    date_str = request.args.get("date", "")
+    region = request.args.get("region", "").strip()
+    try:
+        top_n = int(request.args.get("top_n", 3))
+    except (ValueError, TypeError):
+        top_n = 3
+
+    today = datetime.now(TW_TZ).date()
+    max_date = today + timedelta(days=7)
+
+    def sse(event, payload):
+        """組一則 SSE 訊息；payload 以 JSON 編成單行，換行/引號交給 json 處理。"""
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    # 日期驗證（與 POST 相同規則）：不合法直接送 failed 事件後結束
+    err_msg = None
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        err_msg = f"參數格式錯誤：日期 {date_str}，請使用 YYYY-MM-DD 格式"
+    else:
+        if not (today <= target_date <= max_date):
+            err_msg = f"日期需在 {today} 至 {max_date} 之間（天氣預報僅支援未來 7 天）"
+
+    if err_msg is not None:
+        return Response(sse("failed", {"message": err_msg}), mimetype="text/event-stream")
+
+    now_tw = datetime.now(TW_TZ)
+    current_hour = now_tw.hour if target_date == now_tw.date() else None
+
+    # 工作執行緒負責耗時評估，把進度/結果丟進 queue；主請求執行緒負責 yield SSE。
+    # （recommend 內部已用 ThreadPoolExecutor 平行查詢，這裡只是再外包一層，
+    #   讓「等結果」與「推進度」能同時進行。）
+    q = queue.Queue()
+
+    def progress(done, total, name):
+        q.put(("progress", {"done": done, "total": total, "name": name}))
+
+    def worker():
+        try:
+            result = recommend(
+                target_date=target_date, max_bortle=4, top_n=top_n,
+                region=region, progress_callback=progress,
+            )
+            q.put(("result", result))
+        except Exception:
+            app.logger.exception("stream recommend failed")
+            q.put(("failed", {"message": "查詢時發生問題，請稍後再試一次。"}))
+        finally:
+            q.put((None, None))  # 結束哨兵
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    @stream_with_context
+    def generate():
+        while True:
+            kind, payload = q.get()
+            if kind is None:
+                break
+            if kind == "result":
+                # render_template 需在請求情境內執行，stream_with_context 已保證
+                html = render_template(
+                    "_result.html", result=payload,
+                    selected_region=region, selected_top_n=top_n,
+                    current_hour=current_hour,
+                )
+                yield sse("result", {"html": html})
+            else:
+                yield sse(kind, payload)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@ import pytz
 TW_TZ = pytz.timezone("Asia/Taipei")
 
 
-def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: str = None) -> dict:
+def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: str = None,
+              progress_callback=None) -> dict:
     """
     主函式：計算指定日期的最佳銀河拍攝地點
 
@@ -47,7 +48,7 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: st
         }
     """
     month = target_date.month
-    is_future = target_date > date.today()
+    is_future = target_date > datetime.now(TW_TZ).date()
 
     candidates = get_locations_for_weekend(month=month, max_bortle=max_bortle)
 
@@ -59,6 +60,20 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: st
         filtered = [loc for loc in candidates if region in loc["region"]]
         if filtered:
             candidates = filtered
+
+    # 進度回報（供前端串流進度條）：先送 0/total 讓前端立即顯示分母、避免初始空窗。
+    # progress_callback(done, total, name)；name 為剛完成的地點（初始為 None）。
+    total = len(candidates)
+    done = 0
+
+    def _report(name):
+        if progress_callback:
+            try:
+                progress_callback(done, total, name)
+            except Exception:
+                pass  # 進度回報失敗不影響主流程
+
+    _report(None)
 
     print(f"📍 共 {len(candidates)} 個候選地點，開始評估...\n")
 
@@ -119,6 +134,8 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: st
                 print(f"  ✓ {loc['name']}")
             except Exception as e:
                 print(f"  ⚠️  {loc['name']} 查詢失敗：{e}，略過")
+            done += 1
+            _report(loc["name"])
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     top = scored[:top_n]
@@ -288,7 +305,7 @@ def build_report(target_date: date, top: list, all_scored: list) -> str:
     lines = []
     weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
     weekday = weekday_names[target_date.weekday()]
-    is_future = target_date > date.today()
+    is_future = target_date > datetime.now(TW_TZ).date()
 
     lines.append("=" * 60)
     lines.append(f"🌌  {target_date}（週{weekday}）銀河拍攝地點推薦")
