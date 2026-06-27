@@ -29,6 +29,7 @@ import urllib.request
 import urllib.error
 import json
 import ssl
+import certifi
 import time
 import threading
 from datetime import date, datetime, timedelta
@@ -36,11 +37,11 @@ import pytz
 
 TW_TZ = pytz.timezone("Asia/Taipei")
 
-# Render 上 Python 的 SSL 驗證對部分 API 會失敗，建立不驗證的 context
-# （與 cwa.py、airquality.py 相同做法）
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
+# Open-Meteo 是商業 API、憑證正常，啟用 SSL 驗證以防中間人攻擊（MITM）。
+# Render 環境曾出現 CERTIFICATE_VERIFY_FAILED，根因多半是執行環境缺少 CA 憑證包，
+# 而非對方憑證有問題 —— 改用 certifi 提供的 CA bundle 即可正常驗證並解決該錯誤。
+# （cwa.py、airquality.py 連的是政府 API，其憑證有已知缺陷，仍各自保留繞過做法。）
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 # Open-Meteo 逐小時資料快取
 # key: (lat, lon, date_str)，TTL 30 分鐘
@@ -246,11 +247,12 @@ def _fetch_api(params: dict) -> dict:
 
     快取 key 由 lat / lon / start_date 組成，TTL 30 分鐘。
 
-    嘗試策略（依序）：
-    1. 自訂 SSL context（繞過憑證驗證），timeout 25s
-       → 解決 Render 環境下 SSL CERTIFICATE_VERIFY_FAILED
-    2. 標準 SSL（系統預設 CA），timeout 30s
-       → 解決 1 的 context 本身引起的問題
+    嘗試策略（依序，兩者皆會驗證憑證，保有 MITM 防護）：
+    1. certifi CA bundle 的 SSL context，timeout 25s
+       → 用 certifi 提供的 CA 憑證包，解決 Render 環境缺 CA 導致的
+         CERTIFICATE_VERIFY_FAILED
+    2. 系統預設 CA，timeout 30s
+       → 後備：改用作業系統內建的 CA 憑證再試一次
     每次失敗都印出錯誤類型供 Render 日誌診斷。
     """
     cache_key = (params.get("latitude"), params.get("longitude"), params.get("start_date"))
@@ -275,8 +277,8 @@ def _fetch_api(params: dict) -> dict:
 
     last_error = None
     strategies = [
-        ("SSL-bypass",  _SSL_CTX, 25),
-        ("SSL-default", None,     30),
+        ("SSL-certifi", _SSL_CTX, 25),   # 主要：用 certifi CA bundle 正常驗證
+        ("SSL-default", None,     30),   # 後備：系統預設 CA（兩者皆有驗證）
     ]
 
     for label, ssl_ctx, timeout in strategies:
