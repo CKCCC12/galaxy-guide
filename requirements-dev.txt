@@ -1,0 +1,5 @@
+# 開發／測試用相依套件（不進 requirements.txt，避免拖慢 Render 生產環境 build）
+#
+# 安裝：pip install -r requirements.txt -r requirements-dev.txt
+# 執行測試：pytest
+pytest>=8,<9
