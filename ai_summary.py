@@ -82,16 +82,38 @@ def _secret_key():
     return os.environ.get("AI_SUMMARY_SECRET") or None
 
 
+def _js_normalize(obj):
+    """把資料正規化成「JavaScript JSON round-trip 後」的等價形式。
+
+    為什麼需要？前端讀取嵌入頁面的 aiPayload 後，會 `JSON.parse` 再
+    `JSON.stringify` 才 POST 回來。JavaScript 只有一種數字型別，會把「整數值
+    的浮點數」塌成整數：例如雲量 `22.0`、月光照明 `96.0` 會變成 `22`、`96`。
+    但 Python 簽章時是 `22.0`，兩邊的 JSON 字串不同 → HMAC 對不上 →
+    合法 payload 被誤判為偽造，AI 卡片就靜默消失。
+
+    對策：簽章與驗章前都先把「等於整數的浮點數」轉成 int，讓兩端一致。
+    （非整數浮點數如 `22.5`、`0.123`，Python 與 JS 的最短表示法相同，不受影響。）
+    """
+    if isinstance(obj, float) and obj.is_integer():
+        return int(obj)
+    if isinstance(obj, dict):
+        return {k: _js_normalize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_js_normalize(v) for v in obj]
+    return obj
+
+
 def _sign_payload(data: dict) -> str:
     """對 payload 的資料部分算 HMAC-SHA256，未設密鑰時回空字串。
 
     以 sort_keys 的 JSON 當簽章訊息，確保序列化順序穩定
     （與 _cache_key 相同做法，前後端算出來才會一致）。
+    先過 _js_normalize，讓簽章不受前端 JSON round-trip 的浮點數塌陷影響。
     """
     secret = _secret_key()
     if not secret:
         return ""
-    raw = json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    raw = json.dumps(_js_normalize(data), sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
 
 
