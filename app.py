@@ -16,8 +16,16 @@ import threading
 from recommender import recommend
 from weather import TW_TZ
 from ai_summary import build_payload, get_ai_summary
+from locations import get_regions
 
 app = Flask(__name__)
+
+
+@app.context_processor
+def inject_regions():
+    """讓所有樣板都能取用區域清單（區域下拉選單改由 locations.py 動態產生，
+    新增地點時不必再手動同步 index.html 的選項）。"""
+    return {"regions": get_regions()}
 
 
 def _debug_authorized() -> bool:

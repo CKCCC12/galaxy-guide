@@ -3,7 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>台灣銀河拍攝地點推薦</title>
+  <title>台灣銀河拍攝地點推薦｜整合天氣、月相、空品的觀星選點工具</title>
+
+  <!-- ── SEO：搜尋引擎摘要 ── -->
+  <meta name="description" content="整合雲量、能見度、月相、空氣品質與降雨機率，推薦台灣未來 7 天最適合拍攝銀河的地點與時段。專為觀星民眾與銀河攝影愛好者打造，資料來自 Open-Meteo、氣象署與環境部。" />
+  <meta name="keywords" content="銀河攝影,觀星,星空攝影,拍銀河,台灣觀星地點,暗空,光害,Bortle,銀河季,天文攝影" />
+  <meta name="theme-color" content="#060c20" />
+  <link rel="canonical" href="{{ request.url_root }}" />
+
+  <!-- ── Open Graph：分享到 LINE / Facebook 的預覽卡 ── -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="台灣銀河拍攝地點推薦" />
+  <meta property="og:title" content="台灣銀河拍攝地點推薦" />
+  <meta property="og:description" content="整合天氣、月相、空氣品質，找出台灣未來 7 天最佳的銀河拍攝地點與時段。" />
+  <meta property="og:locale" content="zh_TW" />
+  <meta property="og:url" content="{{ request.url_root }}" />
+
+  <!-- ── Twitter Card ── -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="台灣銀河拍攝地點推薦" />
+  <meta name="twitter:description" content="整合天氣、月相、空氣品質，找出台灣未來 7 天最佳的銀河拍攝地點與時段。" />
   <style>
     /* ── 全域 ── */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -418,7 +437,9 @@
     }
     .hourly-chart canvas { display: block; width: 100% !important; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- defer：不阻塞首屏渲染。圖表都在 DOMContentLoaded 後才初始化，
+       而 defer 腳本保證在 DOMContentLoaded 前依序執行完畢，故 Chart 一定已就緒。 -->
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -448,11 +469,9 @@
           <div class="select-wrap">
             <select name="region">
               <option value="全部" {% if not selected_region or selected_region == '全部' %}selected{% endif %}>全部地區</option>
-              <option value="南投" {% if selected_region == '南投' %}selected{% endif %}>南投</option>
-              <option value="嘉義" {% if selected_region == '嘉義' %}selected{% endif %}>嘉義</option>
-              <option value="花蓮" {% if selected_region == '花蓮' %}selected{% endif %}>花蓮</option>
-              <option value="台東" {% if selected_region == '台東' %}selected{% endif %}>台東</option>
-              <option value="屏東" {% if selected_region == '屏東' %}selected{% endif %}>屏東</option>
+              {% for r in regions %}
+              <option value="{{ r }}" {% if selected_region == r %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
             </select>
           </div>
         </div>
@@ -830,7 +849,12 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-      const today = new Date().toISOString().split('T')[0];
+      // 用本地時區組今天日期。注意：toISOString() 會先轉成 UTC，台灣（UTC+8）
+      // 在清晨 08:00 前會得到「前一天」，故改用 getFullYear/Month/Date 取本地日期。
+      const now = new Date();
+      const today = now.getFullYear() + '-' +
+        String(now.getMonth() + 1).padStart(2, '0') + '-' +
+        String(now.getDate()).padStart(2, '0');
       const dInput = document.querySelector('input[type="date"]');
       if (dInput && !dInput.value) dInput.value = today;
 
