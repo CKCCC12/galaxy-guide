@@ -836,21 +836,22 @@
       if (!el) return;
 
       const map = L.map(el, { scrollWheelZoom: false }).setView([23.6, 121.0], 7);
-      // CARTO dark_matter 底圖：OSM 資料的深色版，免金鑰，融入深空主題
-      L.tileLayer('https://{s}.basemap.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd', maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+      // Esri 衛星影像底圖：免金鑰，能看到真實海岸線/山脈/離島，深色調融入深空主題，
+      // 比純深色底圖更能讓使用者判斷「這個點在哪座山、哪段海岸」。
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 18,
+        attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a> — Source: Esri, Maxar, Earthstar Geographics, GIS User Community'
       }).addTo(map);
       window._ggMap = map;
 
-      // 初始：全部地點以中性青色標出，點擊看名稱/區域/光害
+      // 初始：全部地點以中性青色標出（白色外框讓點在衛星影像上更醒目），點擊看名稱/區域/光害
       let locs = [];
       const src = document.getElementById('allLocations');
       if (src) { try { locs = JSON.parse(src.textContent); } catch (e) { locs = []; } }
       locs.forEach(function (loc) {
         const m = L.circleMarker([loc.lat, loc.lon], {
-          radius: 7, color: '#5090d0', weight: 2,
-          fillColor: '#5090d0', fillOpacity: 0.5
+          radius: 6, color: '#ffffff', weight: 1.5, opacity: 0.9,
+          fillColor: '#7fb8ff', fillOpacity: 0.85
         });
         m.bindPopup('<b>' + loc.name + '</b><br>' + loc.region + '｜Bortle ' + loc.bortle);
         m.addTo(map);
@@ -874,7 +875,7 @@
         const m = window._ggMarkers[s.name];
         if (!m) return;
         const c = scoreColor(s.score);
-        m.setStyle({ color: c, fillColor: c, fillOpacity: 0.85, radius: 9 });
+        m.setStyle({ color: '#ffffff', weight: 1.5, fillColor: c, fillOpacity: 0.95, radius: 8 });
         m.bindPopup('<b>' + s.name + '</b><br>銀河可見指數 ' + Math.round(s.score) + ' 分');
         bounds.push([s.lat, s.lon]);
       });
