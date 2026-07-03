@@ -3,6 +3,11 @@
       共評估 {{ result.candidates | length }} 個候選地點
     </div>
 
+    <!-- 地圖上色資料：全部候選地點的分數，供 index.html 的 updateMapScores() 讀取 -->
+    {% if map_scores %}
+    <script id="mapScores" type="application/json">{{ map_scores | tojson }}</script>
+    {% endif %}
+
     <!-- AI 智慧解讀：載入中佔位 + 完成後填入的卡片，皆由 index.html 的 loadAiSummary() 控制顯示 -->
     {% if ai_payload and ai_payload.locations %}
     <div class="ai-card" id="aiLoading">

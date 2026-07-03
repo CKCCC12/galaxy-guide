@@ -217,6 +217,24 @@ def get_all_locations():
     return LOCATIONS
 
 
+def get_map_locations():
+    """回傳地圖標記所需的精簡欄位（座標、名稱、區域、光害等級）。
+
+    刻意只給前端地圖會用到的欄位，不傳整包 notes/google_maps，
+    讓嵌進頁面的 JSON 小一點。座標用來畫點，名稱作為查詢後對應分數的 key。
+    """
+    return [
+        {
+            "name": loc["name"],
+            "lat": loc["lat"],
+            "lon": loc["lon"],
+            "region": loc["region"],
+            "bortle": loc["bortle"],
+        }
+        for loc in LOCATIONS
+    ]
+
+
 def get_regions():
     """回傳供區域下拉選單使用的「基礎區域」清單（依資料出現順序、去重）。
 
