@@ -23,6 +23,16 @@
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="台灣銀河拍攝地點推薦" />
   <meta name="twitter:description" content="整合天氣、月相、空氣品質，找出台灣未來 7 天最佳的銀河拍攝地點與時段。" />
+
+  <!-- ── PWA：可「加入主畫面」、以獨立視窗開啟 ── -->
+  <link rel="manifest" href="/static/manifest.json" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+
+  <!-- ── Leaflet 地圖樣式（OpenStreetMap 底圖，免金鑰）── -->
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="" />
   <style>
     /* ── 全域 ── */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -436,7 +446,53 @@
       padding: 14px 16px 4px;
     }
     .hourly-chart canvas { display: block; width: 100% !important; }
+
+    /* ── 地圖 ── */
+    .map-card { padding: 16px 16px 14px; }
+    .map-head {
+      font-size: 0.9rem; color: #8aaad8; margin-bottom: 10px;
+      display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    }
+    .map-hint { font-size: 0.72rem; color: #4a6090; }
+    #map {
+      height: 300px; width: 100%;
+      border-radius: 12px; overflow: hidden;
+      border: 1px solid rgba(60, 100, 200, 0.25);
+      background: #060c20;
+    }
+    /* Leaflet 深色化：底圖空隙、彈窗、控制項、出處都調成與深空主題一致 */
+    .leaflet-container { background: #060c20; font: inherit; }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+      background: rgba(10, 22, 60, 0.96); color: #cfe2ff;
+      border: 1px solid rgba(90, 130, 220, 0.4);
+      box-shadow: 0 4px 20px rgba(0, 10, 60, 0.6);
+    }
+    .leaflet-popup-content { font-size: 0.82rem; line-height: 1.55; }
+    .leaflet-popup-content b { color: #d8eaff; }
+    .leaflet-container a.leaflet-popup-close-button { color: #6a8ac0; }
+    .leaflet-control-attribution {
+      background: rgba(6, 12, 32, 0.72) !important; color: #4a6090 !important;
+      font-size: 0.6rem !important;
+    }
+    .leaflet-control-attribution a { color: #6a8ac0 !important; }
+    .leaflet-bar a {
+      background: rgba(10, 25, 70, 0.9); color: #b0ccf0;
+      border-bottom-color: rgba(60, 100, 200, 0.3);
+    }
+    .leaflet-bar a:hover { background: rgba(15, 35, 90, 0.95); }
+    .map-legend {
+      display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px;
+      font-size: 0.72rem; color: #6080a8;
+    }
+    .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .lg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   </style>
+  <!-- Leaflet JS：與 Chart.js 同樣用 defer，DOMContentLoaded 前依序載入完成，
+       故 initMap() 執行時 L 一定已就緒。 -->
+  <script defer
+          src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
   <!-- defer：不阻塞首屏渲染。圖表都在 DOMContentLoaded 後才初始化，
        而 defer 腳本保證在 DOMContentLoaded 前依序執行完畢，故 Chart 一定已就緒。 -->
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -499,6 +555,23 @@
         </div>
       </div>
     </div>
+
+    <!-- 地點分布地圖：初始顯示全部地點，查詢後標記依分數上色 -->
+    <div class="card map-card">
+      <div class="map-head">
+        🗺️ 拍攝地點分布
+        <span class="map-hint">查詢後標記顏色依銀河可見指數變化</span>
+      </div>
+      <div id="map"></div>
+      <div class="map-legend">
+        <span><i class="lg-dot" style="background:#60d080"></i>良好 ≥80</span>
+        <span><i class="lg-dot" style="background:#c8b050"></i>普通 60–79</span>
+        <span><i class="lg-dot" style="background:#a04040"></i>不建議 &lt;60</span>
+        <span><i class="lg-dot" style="background:#5090d0"></i>尚未查詢</span>
+      </div>
+    </div>
+    <!-- 所有地點座標，供地圖初始標記使用 -->
+    <script id="allLocations" type="application/json">{{ map_locations | tojson }}</script>
 
     <!-- 查詢結果：POST 由伺服器渲染填入；串流模式由 JS 注入到同一容器 -->
     <div id="resultArea">
@@ -746,6 +819,71 @@
       window._charts = {};
     }
 
+    /* ════════════════════════════════════════
+       地點分布地圖（Leaflet + OpenStreetMap）
+    ════════════════════════════════════════ */
+    window._ggMap = null;
+    window._ggMarkers = {};
+
+    function scoreColor(s) {
+      // 與分數等級標籤、趨勢圖點色一致：≥80 綠、≥60 黃、其餘紅
+      return s >= 80 ? '#60d080' : s >= 60 ? '#c8b050' : '#a04040';
+    }
+
+    function initMap() {
+      if (window._ggMap || typeof L === 'undefined') return;
+      const el = document.getElementById('map');
+      if (!el) return;
+
+      const map = L.map(el, { scrollWheelZoom: false }).setView([23.6, 121.0], 7);
+      // CARTO dark_matter 底圖：OSM 資料的深色版，免金鑰，融入深空主題
+      L.tileLayer('https://{s}.basemap.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd', maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+      }).addTo(map);
+      window._ggMap = map;
+
+      // 初始：全部地點以中性青色標出，點擊看名稱/區域/光害
+      let locs = [];
+      const src = document.getElementById('allLocations');
+      if (src) { try { locs = JSON.parse(src.textContent); } catch (e) { locs = []; } }
+      locs.forEach(function (loc) {
+        const m = L.circleMarker([loc.lat, loc.lon], {
+          radius: 7, color: '#5090d0', weight: 2,
+          fillColor: '#5090d0', fillOpacity: 0.5
+        });
+        m.bindPopup('<b>' + loc.name + '</b><br>' + loc.region + '｜Bortle ' + loc.bortle);
+        m.addTo(map);
+        window._ggMarkers[loc.name] = m;
+      });
+
+      // 卡片剛渲染時 Leaflet 可能算錯容器高度，稍後強制重算一次
+      setTimeout(function () { map.invalidateSize(); }, 200);
+    }
+
+    function updateMapScores(root) {
+      // 查詢完成後，依各地點分數替標記重新上色（root 為結果片段的容器）
+      if (!window._ggMap) return;
+      const el = (root || document).querySelector('#mapScores');
+      if (!el) return;
+      let scores;
+      try { scores = JSON.parse(el.textContent); } catch (e) { return; }
+
+      const bounds = [];
+      scores.forEach(function (s) {
+        const m = window._ggMarkers[s.name];
+        if (!m) return;
+        const c = scoreColor(s.score);
+        m.setStyle({ color: c, fillColor: c, fillOpacity: 0.85, radius: 9 });
+        m.bindPopup('<b>' + s.name + '</b><br>銀河可見指數 ' + Math.round(s.score) + ' 分');
+        bounds.push([s.lat, s.lon]);
+      });
+      // 縮放到本次查詢涵蓋的地點範圍（選定單一區域時特別有用）
+      if (bounds.length) {
+        try { window._ggMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 9 }); } catch (e) {}
+      }
+    }
+
     /* ── 串流查詢：真實進度條（SSE）── */
     function finishStreaming() {
       const btn = document.getElementById('submitBtn');
@@ -790,7 +928,8 @@
         resetCharts();
         area.innerHTML = d.html;
         initCharts(area);
-        loadAiSummary();   // 串流注入的結果片段也含 #aiPayload，補上 AI 卡片
+        loadAiSummary();      // 串流注入的結果片段也含 #aiPayload，補上 AI 卡片
+        updateMapScores(area);  // 串流結果片段含 #mapScores，替地圖標記上色
         finishStreaming();
         area.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
@@ -860,6 +999,8 @@
 
       initCharts(document);  // POST／重新整理後的伺服器渲染結果
       loadAiSummary();       // POST／重新整理：讀取伺服器嵌入的 ai_payload
+      initMap();             // 初始化地圖並標出全部地點
+      updateMapScores(document);  // POST／重新整理：若頁面已有結果，替標記上色
 
       const form = document.getElementById('queryForm');
       form.addEventListener('submit', function (e) {
@@ -873,6 +1014,14 @@
         startStreaming(params.toString());
       });
     });
+
+    /* ── PWA：註冊 Service Worker（可加入主畫面、離線顯示殼）──
+       用 window load 事件註冊，不與首屏渲染競爭資源。任何失敗都靜默忽略。 */
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+      });
+    }
   </script>
 </body>
 </html>

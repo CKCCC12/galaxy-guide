@@ -1,0 +1,32 @@
+{
+  "name": "台灣銀河拍攝地點推薦",
+  "short_name": "銀河嚮導",
+  "description": "整合天氣、月相、空氣品質，找出台灣未來 7 天最佳的銀河拍攝地點與時段。",
+  "lang": "zh-Hant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#060c20",
+  "theme_color": "#060c20",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

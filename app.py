@@ -6,7 +6,7 @@
 
 from flask import (
     Flask, render_template, request, jsonify, redirect, url_for,
-    Response, stream_with_context, abort,
+    Response, stream_with_context, abort, send_from_directory,
 )
 from datetime import date, timedelta, datetime
 import os
@@ -16,16 +16,47 @@ import threading
 from recommender import recommend
 from weather import TW_TZ
 from ai_summary import build_payload, get_ai_summary
-from locations import get_regions
+from locations import get_regions, get_map_locations
 
 app = Flask(__name__)
 
 
 @app.context_processor
-def inject_regions():
-    """讓所有樣板都能取用區域清單（區域下拉選單改由 locations.py 動態產生，
-    新增地點時不必再手動同步 index.html 的選項）。"""
-    return {"regions": get_regions()}
+def inject_globals():
+    """讓所有樣板都能取用共用資料：
+      - regions：區域下拉選單（改由 locations.py 動態產生，新增地點免手動同步）
+      - map_locations：地圖初始要標出的全部地點座標
+    """
+    return {
+        "regions": get_regions(),
+        "map_locations": get_map_locations(),
+    }
+
+
+def _build_map_scores(result: dict) -> list:
+    """從推薦結果萃取地圖上色所需的 {名稱, 座標, 分數}（全部候選地點，非只有 top）。"""
+    return [
+        {
+            "name": item["location"]["name"],
+            "lat": item["location"]["lat"],
+            "lon": item["location"]["lon"],
+            "score": round(item["score"]),
+        }
+        for item in result["candidates"]
+    ]
+
+
+@app.route("/sw.js")
+def service_worker():
+    """從根路徑提供 Service Worker，讓它的控制範圍（scope）涵蓋整個站台。
+
+    若放在 /static/sw.js，預設 scope 只有 /static/，無法攔截首頁導覽請求；
+    改由此路由從根路徑送出，scope 即為 /。
+    """
+    resp = send_from_directory(app.static_folder, "sw.js")
+    resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Cache-Control"] = "no-cache"  # SW 本身不快取，確保更新即時生效
+    return resp
 
 
 def _debug_authorized() -> bool:
@@ -190,6 +221,7 @@ def get_recommendation():
             selected_top_n=top_n,
             current_hour=current_hour,
             ai_payload=ai_payload,
+            map_scores=_build_map_scores(result),
         )
 
     except Exception:
@@ -282,6 +314,7 @@ def recommend_stream():
                     "_result.html", result=payload,
                     selected_region=region, selected_top_n=top_n,
                     current_hour=current_hour, ai_payload=ai_payload,
+                    map_scores=_build_map_scores(payload),
                 )
                 yield sse("result", {"html": html})
             else:
