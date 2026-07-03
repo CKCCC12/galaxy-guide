@@ -6,9 +6,10 @@
 
 from flask import (
     Flask, render_template, request, jsonify, redirect, url_for,
-    Response, stream_with_context,
+    Response, stream_with_context, abort,
 )
 from datetime import date, timedelta, datetime
+import os
 import json
 import queue
 import threading
@@ -19,9 +20,24 @@ from ai_summary import build_payload, get_ai_summary
 app = Flask(__name__)
 
 
+def _debug_authorized() -> bool:
+    """除錯端點存取控制：需帶正確 token 才放行。
+
+    這兩個診斷端點（/version、/api-status）原本公開，會放大對外部 API 的呼叫、
+    並把原始錯誤訊息吐給任何訪客。改為需帶 token 才能存取：
+      - DEBUG_TOKEN 未設定 → 一律拒絕（預設關閉，正式環境最安全）
+      - 帶 ?token=... 且與環境變數相符 → 放行
+    未通過時回 404（而非 403），連端點存在與否都不透露，降低被掃描的機會。
+    """
+    token = os.environ.get("DEBUG_TOKEN")
+    return bool(token) and request.args.get("token") == token
+
+
 @app.route("/version")
 def version():
-    """部署驗證端點：回傳當前運行版本標記與關鍵函式是否存在"""
+    """部署驗證端點：回傳當前運行版本標記與關鍵函式是否存在（需 DEBUG_TOKEN）"""
+    if not _debug_authorized():
+        abort(404)
     import weather
     return jsonify({
         "version": "batch-prefetch-v1",
@@ -31,7 +47,9 @@ def version():
 
 @app.route("/api-status")
 def api_status():
-    """診斷端點：測試每個外部 API 的連線狀態，直接顯示錯誤訊息"""
+    """診斷端點：測試每個外部 API 的連線狀態，直接顯示錯誤訊息（需 DEBUG_TOKEN）"""
+    if not _debug_authorized():
+        abort(404)
     import urllib.request
     import ssl
     import json
@@ -166,13 +184,16 @@ def get_recommendation():
             ai_payload=ai_payload,
         )
 
-    except Exception as e:
+    except Exception:
+        # 不把原始例外訊息（可能含堆疊細節、內部路徑、API 回應）吐給使用者，
+        # 只寫進伺服器日誌供除錯；對外顯示通用訊息（與 SSE 路徑一致）。
+        app.logger.exception("recommend (POST) 查詢失敗")
         return render_template(
             "index.html",
             default_date=date_str,
             max_date=max_date.strftime("%Y-%m-%d"),
             result=None,
-            error=f"查詢失敗：{str(e)}",
+            error="查詢時發生問題，請稍後再試一次。",
         )
 
 
