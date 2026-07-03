@@ -217,6 +217,26 @@ def get_all_locations():
     return LOCATIONS
 
 
+def get_regions():
+    """回傳供區域下拉選單使用的「基礎區域」清單（依資料出現順序、去重）。
+
+    為什麼要「基礎區域」而不是直接用每個地點的 region 欄位？
+      資料裡有「台東（離島）」「屏東（離島）」這種帶括號後綴的區域，
+      但 recommender 的區域過濾是用子字串比對（`region in loc["region"]`），
+      所以下拉選單只要給「台東」就能同時涵蓋「台東」與「台東（離島）」。
+      這裡把全形括號後綴切掉再去重，得到乾淨的基礎區域名。
+
+    改為動態產生後，未來在 LOCATIONS 新增地點（例如補上北部的宜蘭、新竹），
+    下拉選單會自動出現對應區域，不必再手動同步 index.html 的 <option>。
+    """
+    regions = []
+    for loc in LOCATIONS:
+        base = loc["region"].split("（")[0]  # 「台東（離島）」→「台東」
+        if base not in regions:
+            regions.append(base)
+    return regions
+
+
 def get_locations_by_region(region: str):
     """依區域篩選地點"""
     return [loc for loc in LOCATIONS if loc["region"] == region]

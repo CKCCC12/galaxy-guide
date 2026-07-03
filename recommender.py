@@ -23,9 +23,36 @@ from weather import get_cloud_forecast, prefetch_weather_batch
 from astronomy import get_best_shooting_window
 from airquality import get_current_aqi, get_aqi_level, format_aqi_report
 from cwa import get_pop_forecast, format_pop_report, get_cloud_from_cwa
+import time
+import threading
 import pytz
 
 TW_TZ = pytz.timezone("Asia/Taipei")
+
+# ── 推薦結果整層快取 ─────────────────────────────────────────
+# 底層各 API 雖已各自快取，但「評分 14 個地點」這道組裝工序每次查詢都重跑。
+# 這裡把整份評分結果（scored）也快取起來：同一 (日期,區域,bortle) 在 TTL 內
+# 再查，直接跳過所有外部 API 與評分，重複查詢從約 10 秒降到 <1 秒。
+#
+# 為什麼 key 不含 top_n？
+#   top_n 只影響最後「取前幾名」的切片，不影響評分本身。快取完整 scored 清單，
+#   命中後依當次 top_n 重新切片、重建 report，讓不同 top_n 共用同一份計算。
+#
+# 為什麼 current_hour 不會受影響？
+#   current_hour（標記當前時段）在 app.py 計算、與 recommend() 無關，
+#   每個請求都即時取得，不會被這層快取凍結。
+#
+# TTL 10 分鐘：底層天氣快取 30 分、空品/降雨 2 分，整層 10 分是合理折衷
+# （對觀星選點而言，10 分鐘內的雲量/空品幾乎不變）。
+_RESULT_CACHE_TTL = 600  # 秒
+_result_cache_lock = threading.Lock()
+_result_cache: dict = {}
+
+
+def _result_cache_key(target_date: date, region: str, max_bortle: int) -> tuple:
+    """組整層快取的 key。region 正規化：None/空字串一律視為「全部」。"""
+    region_norm = (region or "全部").strip() or "全部"
+    return (target_date.isoformat(), region_norm, max_bortle)
 
 
 def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: str = None,
@@ -47,6 +74,33 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: st
             "report": str,
         }
     """
+    # ── 整層快取：命中就跳過所有外部 API 與評分，直接依 top_n 重組回傳 ──
+    cache_key = _result_cache_key(target_date, region, max_bortle)
+    with _result_cache_lock:
+        entry = _result_cache.get(cache_key)
+        cached_scored = (
+            entry["scored"]
+            if entry and time.time() - entry["ts"] < _RESULT_CACHE_TTL
+            else None
+        )
+
+    if cached_scored is not None:
+        # 進度條直接跳 100%（前端 SSE 不需改）；scored 已是排序好的完整清單
+        if progress_callback:
+            try:
+                progress_callback(len(cached_scored), len(cached_scored), None)
+            except Exception:
+                pass
+        print(f"⚡ 整層快取命中 {cache_key}，跳過評估直接重組", flush=True)
+        top = cached_scored[:top_n]
+        # report 內的 is_future 於 build_report 內即時重算，故跨日仍正確
+        return {
+            "date": target_date,
+            "candidates": cached_scored,
+            "top": top,
+            "report": build_report(target_date, top, cached_scored),
+        }
+
     month = target_date.month
     is_future = target_date > datetime.now(TW_TZ).date()
 
@@ -138,6 +192,16 @@ def recommend(target_date: date, max_bortle: int = 4, top_n: int = 3, region: st
             _report(loc["name"])
 
     scored.sort(key=lambda x: x["score"], reverse=True)
+
+    # 寫入整層快取：存完整 scored（與 top_n 無關）。順手清掉過期項目，
+    # 避免日期每天位移後舊 key 殘留累積記憶體（Render 512MB 需節制）。
+    with _result_cache_lock:
+        now = time.time()
+        expired = [k for k, v in _result_cache.items() if now - v["ts"] >= _RESULT_CACHE_TTL]
+        for k in expired:
+            del _result_cache[k]
+        _result_cache[cache_key] = {"scored": scored, "ts": now}
+
     top = scored[:top_n]
     report = build_report(target_date, top, scored)
 

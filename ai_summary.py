@@ -22,9 +22,11 @@ import os
 import ssl
 import json
 import time
+import hmac
 import hashlib
 import urllib.request
 import urllib.error
+import certifi
 
 # 與 airquality.py / cwa.py 一致：若有安裝 python-dotenv，就從 .env 載入金鑰。
 # 未安裝時 os.environ 本來就有的環境變數（如 Render 後台設定）仍可使用。
@@ -34,11 +36,10 @@ try:
 except ImportError:
     pass
 
-# 與 weather.py 相同：Render 部署環境偶有 SSL 憑證問題，
-# 用寬鬆 context 確保連得上（這裡呼叫的是 Google 公開 API，風險可接受）。
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
+# 與 weather.py 一致：Google 憑證正常，啟用 SSL 驗證以防中間人攻擊（MITM）。
+# Render 環境曾因執行環境缺少 CA 憑證包出現 CERTIFICATE_VERIFY_FAILED，
+# 改用 certifi 提供的 CA bundle 即可正常驗證並解決該錯誤（取代原本的 CERT_NONE 繞過）。
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 # 免費版 Gemini 模型；可用環境變數覆寫成其他型號。
 # 註：gemini-2.0 系列在部分免費金鑰的額度為 0（會回 429 limit:0），
@@ -59,6 +60,55 @@ _TIMEOUT = 15  # 秒；超過就放棄，前端維持「無卡片」狀態，不
 def _get_api_key():
     """讀取 Gemini API 金鑰，未設定回 None（觸發降級）。"""
     return os.environ.get("GEMINI_API_KEY") or None
+
+
+# ── /ai-summary 濫用防護：HMAC 簽章 ──────────────────────────
+# /ai-summary 是公開端點。若任何人都能 POST 任意 payload，等於把 Gemini
+# 額度開放給全世界濫用（燒光免費額度、被 Google 限流），且 payload 內容會被
+# 組進 prompt（prompt injection 風險）。
+#
+# 對策：payload 由伺服器 build_payload() 產生時附上 HMAC-SHA256 簽章；
+# /ai-summary 收到後先驗章，不符即拒絕。前端只能原封轉交「伺服器自己算過」
+# 的資料，無法偽造內容。
+#
+# 密鑰 AI_SUMMARY_SECRET 由環境變數提供。未設定時「不啟用驗證」——與專案
+# 其他模組「沒金鑰就優雅降級」的一致做法，但正式部署務必於 Render 後台設定，
+# 否則此防護等於關閉。
+_SIG_FIELD = "sig"
+
+
+def _secret_key():
+    """讀取簽章密鑰，未設定回 None（不啟用驗證）。"""
+    return os.environ.get("AI_SUMMARY_SECRET") or None
+
+
+def _sign_payload(data: dict) -> str:
+    """對 payload 的資料部分算 HMAC-SHA256，未設密鑰時回空字串。
+
+    以 sort_keys 的 JSON 當簽章訊息，確保序列化順序穩定
+    （與 _cache_key 相同做法，前後端算出來才會一致）。
+    """
+    secret = _secret_key()
+    if not secret:
+        return ""
+    raw = json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
+
+def _verify_payload(payload: dict) -> bool:
+    """驗證 payload 簽章。未設密鑰時一律通過（降級不阻擋）。
+
+    用 hmac.compare_digest 做定時比較，避免計時攻擊（timing attack）
+    透過回應時間差反推正確簽章。
+    """
+    secret = _secret_key()
+    if not secret:
+        return True
+    provided = payload.get(_SIG_FIELD, "")
+    if not provided:
+        return False
+    data = {k: v for k, v in payload.items() if k != _SIG_FIELD}
+    return hmac.compare_digest(provided, _sign_payload(data))
 
 
 def build_payload(target_date, top: list) -> dict:
@@ -110,11 +160,14 @@ def build_payload(target_date, top: list) -> dict:
             "golden_window": golden_str,
         })
 
-    return {
+    payload = {
         "date": target_date.strftime("%Y-%m-%d"),
         "weekday": weekday_names[target_date.weekday()],
         "locations": locations,
     }
+    # 附上 HMAC 簽章，供 /ai-summary 驗證此 payload 確實由本站產生（見 _verify_payload）
+    payload[_SIG_FIELD] = _sign_payload(payload)
+    return payload
 
 
 def _build_prompt(payload: dict) -> str:
@@ -184,6 +237,11 @@ def get_ai_summary(payload: dict) -> dict:
         return {"error": "no_key"}
     if not payload or not payload.get("locations"):
         return {"error": "no_data"}
+    # 驗簽：擋掉偽造 payload 的濫用（未設 AI_SUMMARY_SECRET 時此檢查自動放行）
+    if not _verify_payload(payload):
+        return {"error": "bad_sig"}
+    # 驗證後移除簽章欄位，讓後續的快取 key 與 prompt 只看純資料
+    payload = {k: v for k, v in payload.items() if k != _SIG_FIELD}
 
     key = _cache_key(payload)
     now = time.time()
@@ -215,7 +273,9 @@ def get_ai_summary(payload: dict) -> dict:
         },
     }
 
-    url = _API_URL.format(model=_MODEL) + f"?key={api_key}"
+    # 金鑰改放 header（x-goog-api-key），不放 URL query string：
+    # URL 常被寫進代理紀錄、瀏覽器歷史、伺服器日誌，放 header 較不易外洩。
+    url = _API_URL.format(model=_MODEL)
     try:
         req = urllib.request.Request(
             url,
@@ -223,6 +283,7 @@ def get_ai_summary(payload: dict) -> dict:
             headers={
                 "Content-Type": "application/json",
                 "User-Agent": "galaxy-guide/1.0",
+                "x-goog-api-key": api_key,
             },
             method="POST",
         )
